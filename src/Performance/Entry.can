@@ -1,0 +1,334 @@
+module Performance.Entry exposing
+    ( Entry(..)
+    , Mark
+    , Measure
+    , LongTask
+    , LayoutShift
+    , LcpEntry
+    , EventTiming
+    , getName
+    , getStartTime
+    , getDuration
+    , isMarkEntry
+    , isMeasureEntry
+    , isLongTaskEntry
+    , isLayoutShiftEntry
+    , isLcpEntry
+    , isEventEntry
+    , filterMarks
+    , filterMeasures
+    , filterLongTasks
+    )
+
+
+{-| Performance entry types from the browser's performance timeline.
+
+Each variant wraps a record with the relevant fields for that entry type.
+These are returned by performance queries and observer subscriptions.
+
+
+# Entry Type
+
+@docs Entry
+
+
+# Specific Entry Records
+
+@docs Mark, Measure, LongTask, LayoutShift, LcpEntry, EventTiming
+
+
+# Accessors
+
+@docs getName, getStartTime, getDuration
+
+
+# Type Checks
+
+@docs isMarkEntry, isMeasureEntry, isLongTaskEntry, isLayoutShiftEntry, isLcpEntry, isEventEntry
+
+
+# Filtering
+
+@docs filterMarks, filterMeasures, filterLongTasks
+
+-}
+
+
+import Json.Encode
+
+
+
+-- TYPES
+
+
+{-| A performance entry from the browser's performance timeline.
+
+Different entry types carry different fields. Use pattern matching
+to extract the specific data you need.
+-}
+type Entry
+    = MarkEntry Mark
+    | MeasureEntry Measure
+    | LongTaskEntry LongTask
+    | LayoutShiftEntry LayoutShift
+    | LargestContentfulPaintEntry LcpEntry
+    | EventEntry EventTiming
+
+
+{-| A custom performance mark created by `Performance.mark`. -}
+type alias Mark =
+    { name : String
+    , startTime : Float
+    , detail : Maybe Json.Encode.Value
+    }
+
+
+{-| A custom performance measure created by `Performance.measure`. -}
+type alias Measure =
+    { name : String
+    , startTime : Float
+    , duration : Float
+    , detail : Maybe Json.Encode.Value
+    }
+
+
+{-| A long task that blocked the main thread for more than 50ms. -}
+type alias LongTask =
+    { name : String
+    , startTime : Float
+    , duration : Float
+    }
+
+
+{-| A layout shift event indicating visual instability. -}
+type alias LayoutShift =
+    { value : Float
+    , startTime : Float
+    , hadRecentInput : Bool
+    }
+
+
+{-| A Largest Contentful Paint entry for LCP measurement. -}
+type alias LcpEntry =
+    { startTime : Float
+    , renderTime : Float
+    , loadTime : Float
+    , size : Int
+    , element : Maybe String
+    , url : Maybe String
+    }
+
+
+{-| An event timing entry used for INP calculation. -}
+type alias EventTiming =
+    { name : String
+    , startTime : Float
+    , processingStart : Float
+    , processingEnd : Float
+    , duration : Float
+    , interactionId : Int
+    }
+
+
+
+-- ACCESSORS
+
+
+{-| Get the name of a performance entry.
+
+For marks and measures, this is the user-provided name.
+For long tasks, this is typically "self".
+For layout shifts and LCP entries, this returns a descriptive label.
+For event entries, this is the event type.
+-}
+getName : Entry -> String
+getName entry =
+    case entry of
+        MarkEntry m ->
+            m.name
+
+        MeasureEntry m ->
+            m.name
+
+        LongTaskEntry t ->
+            t.name
+
+        LayoutShiftEntry _ ->
+            "layout-shift"
+
+        LargestContentfulPaintEntry _ ->
+            "largest-contentful-paint"
+
+        EventEntry e ->
+            e.name
+
+
+{-| Get the start time of a performance entry in milliseconds. -}
+getStartTime : Entry -> Float
+getStartTime entry =
+    case entry of
+        MarkEntry m ->
+            m.startTime
+
+        MeasureEntry m ->
+            m.startTime
+
+        LongTaskEntry t ->
+            t.startTime
+
+        LayoutShiftEntry s ->
+            s.startTime
+
+        LargestContentfulPaintEntry l ->
+            l.startTime
+
+        EventEntry e ->
+            e.startTime
+
+
+{-| Get the duration of a performance entry in milliseconds.
+
+Marks and layout shifts have zero duration. LCP entries return the render time.
+-}
+getDuration : Entry -> Float
+getDuration entry =
+    case entry of
+        MarkEntry _ ->
+            0
+
+        MeasureEntry m ->
+            m.duration
+
+        LongTaskEntry t ->
+            t.duration
+
+        LayoutShiftEntry _ ->
+            0
+
+        LargestContentfulPaintEntry l ->
+            l.renderTime
+
+        EventEntry e ->
+            e.duration
+
+
+
+-- TYPE CHECKS
+
+
+{-| Check if an entry is a mark entry. -}
+isMarkEntry : Entry -> Bool
+isMarkEntry entry =
+    case entry of
+        MarkEntry _ ->
+            True
+
+        _ ->
+            False
+
+
+{-| Check if an entry is a measure entry. -}
+isMeasureEntry : Entry -> Bool
+isMeasureEntry entry =
+    case entry of
+        MeasureEntry _ ->
+            True
+
+        _ ->
+            False
+
+
+{-| Check if an entry is a long task entry. -}
+isLongTaskEntry : Entry -> Bool
+isLongTaskEntry entry =
+    case entry of
+        LongTaskEntry _ ->
+            True
+
+        _ ->
+            False
+
+
+{-| Check if an entry is a layout shift entry. -}
+isLayoutShiftEntry : Entry -> Bool
+isLayoutShiftEntry entry =
+    case entry of
+        LayoutShiftEntry _ ->
+            True
+
+        _ ->
+            False
+
+
+{-| Check if an entry is a largest contentful paint entry. -}
+isLcpEntry : Entry -> Bool
+isLcpEntry entry =
+    case entry of
+        LargestContentfulPaintEntry _ ->
+            True
+
+        _ ->
+            False
+
+
+{-| Check if an entry is an event timing entry. -}
+isEventEntry : Entry -> Bool
+isEventEntry entry =
+    case entry of
+        EventEntry _ ->
+            True
+
+        _ ->
+            False
+
+
+
+-- FILTERING
+
+
+{-| Extract all mark entries from a list of entries. -}
+filterMarks : List Entry -> List Mark
+filterMarks entries =
+    List.filterMap extractMark entries
+
+
+{-| Extract all measure entries from a list of entries. -}
+filterMeasures : List Entry -> List Measure
+filterMeasures entries =
+    List.filterMap extractMeasure entries
+
+
+{-| Extract all long task entries from a list of entries. -}
+filterLongTasks : List Entry -> List LongTask
+filterLongTasks entries =
+    List.filterMap extractLongTask entries
+
+
+extractMark : Entry -> Maybe Mark
+extractMark entry =
+    case entry of
+        MarkEntry m ->
+            Just m
+
+        _ ->
+            Nothing
+
+
+extractMeasure : Entry -> Maybe Measure
+extractMeasure entry =
+    case entry of
+        MeasureEntry m ->
+            Just m
+
+        _ ->
+            Nothing
+
+
+extractLongTask : Entry -> Maybe LongTask
+extractLongTask entry =
+    case entry of
+        LongTaskEntry t ->
+            Just t
+
+        _ ->
+            Nothing

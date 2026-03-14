@@ -1,0 +1,845 @@
+module Test.Performance exposing (main, tests)
+
+import Basics exposing (..)
+import Expect
+import Json.Encode
+import Performance
+import Performance.Entry as Entry exposing (Entry(..))
+import Performance.Navigation as Navigation exposing (NavigationTiming, NavigationMetrics)
+import Performance.Observer as Observer exposing (EntryType(..))
+import Performance.Resource as Resource exposing (ResourceTiming)
+import Performance.Vitals as Vitals exposing (Rating(..), Vital(..), VitalsReport)
+import Test exposing (..)
+
+
+main : Test
+main =
+    tests
+
+
+tests : Test
+tests =
+    describe "Performance"
+        [ entryTests
+        , navigationTests
+        , resourceTests
+        , vitalsTests
+        , observerTests
+        , performanceCmdTests
+        ]
+
+
+
+-- SAMPLE DATA
+
+
+sampleMark : Entry.Mark
+sampleMark =
+    { name = "test-mark", startTime = 100.5, detail = Nothing }
+
+
+sampleMarkWithDetail : Entry.Mark
+sampleMarkWithDetail =
+    { name = "detail-mark", startTime = 200.0, detail = Just (Json.Encode.string "extra") }
+
+
+sampleMeasure : Entry.Measure
+sampleMeasure =
+    { name = "test-measure", startTime = 100.0, duration = 50.5, detail = Nothing }
+
+
+sampleMeasureWithDetail : Entry.Measure
+sampleMeasureWithDetail =
+    { name = "detailed-measure", startTime = 150.0, duration = 75.0, detail = Just (Json.Encode.int 42) }
+
+
+sampleLongTask : Entry.LongTask
+sampleLongTask =
+    { name = "self", startTime = 500.0, duration = 120.0 }
+
+
+sampleLayoutShift : Entry.LayoutShift
+sampleLayoutShift =
+    { value = 0.15, startTime = 800.0, hadRecentInput = False }
+
+
+sampleLayoutShiftWithInput : Entry.LayoutShift
+sampleLayoutShiftWithInput =
+    { value = 0.05, startTime = 900.0, hadRecentInput = True }
+
+
+sampleLcp : Entry.LcpEntry
+sampleLcp =
+    { startTime = 1200.0, renderTime = 1200.0, loadTime = 1100.0, size = 50000, element = Just "IMG", url = Just "https://example.com/hero.jpg" }
+
+
+sampleLcpNoElement : Entry.LcpEntry
+sampleLcpNoElement =
+    { startTime = 800.0, renderTime = 800.0, loadTime = 0.0, size = 30000, element = Nothing, url = Nothing }
+
+
+sampleEvent : Entry.EventTiming
+sampleEvent =
+    { name = "click", startTime = 2000.0, processingStart = 2010.0, processingEnd = 2050.0, duration = 80.0, interactionId = 7 }
+
+
+allEntries : List Entry
+allEntries =
+    [ MarkEntry sampleMark
+    , MarkEntry sampleMarkWithDetail
+    , MeasureEntry sampleMeasure
+    , MeasureEntry sampleMeasureWithDetail
+    , LongTaskEntry sampleLongTask
+    , LayoutShiftEntry sampleLayoutShift
+    , LargestContentfulPaintEntry sampleLcp
+    , EventEntry sampleEvent
+    ]
+
+
+
+-- ENTRY TESTS
+
+
+entryTests : Test
+entryTests =
+    describe "Entry"
+        [ getNameTests
+        , getStartTimeTests
+        , getDurationTests
+        , typeCheckTests
+        , filterTests
+        ]
+
+
+getNameTests : Test
+getNameTests =
+    describe "getName"
+        [ test "mark entry" <|
+            \() -> Entry.getName (MarkEntry sampleMark) |> Expect.equal "test-mark"
+        , test "measure entry" <|
+            \() -> Entry.getName (MeasureEntry sampleMeasure) |> Expect.equal "test-measure"
+        , test "long task entry" <|
+            \() -> Entry.getName (LongTaskEntry sampleLongTask) |> Expect.equal "self"
+        , test "layout shift entry" <|
+            \() -> Entry.getName (LayoutShiftEntry sampleLayoutShift) |> Expect.equal "layout-shift"
+        , test "lcp entry" <|
+            \() -> Entry.getName (LargestContentfulPaintEntry sampleLcp) |> Expect.equal "largest-contentful-paint"
+        , test "event entry" <|
+            \() -> Entry.getName (EventEntry sampleEvent) |> Expect.equal "click"
+        ]
+
+
+getStartTimeTests : Test
+getStartTimeTests =
+    describe "getStartTime"
+        [ test "mark entry" <|
+            \() -> Entry.getStartTime (MarkEntry sampleMark) |> Expect.equal 100.5
+        , test "measure entry" <|
+            \() -> Entry.getStartTime (MeasureEntry sampleMeasure) |> Expect.equal 100.0
+        , test "long task entry" <|
+            \() -> Entry.getStartTime (LongTaskEntry sampleLongTask) |> Expect.equal 500.0
+        , test "layout shift entry" <|
+            \() -> Entry.getStartTime (LayoutShiftEntry sampleLayoutShift) |> Expect.equal 800.0
+        , test "lcp entry" <|
+            \() -> Entry.getStartTime (LargestContentfulPaintEntry sampleLcp) |> Expect.equal 1200.0
+        , test "event entry" <|
+            \() -> Entry.getStartTime (EventEntry sampleEvent) |> Expect.equal 2000.0
+        ]
+
+
+getDurationTests : Test
+getDurationTests =
+    describe "getDuration"
+        [ test "mark entry has zero duration" <|
+            \() -> Entry.getDuration (MarkEntry sampleMark) |> Expect.equal 0
+        , test "measure entry has duration" <|
+            \() -> Entry.getDuration (MeasureEntry sampleMeasure) |> Expect.equal 50.5
+        , test "long task entry has duration" <|
+            \() -> Entry.getDuration (LongTaskEntry sampleLongTask) |> Expect.equal 120.0
+        , test "layout shift has zero duration" <|
+            \() -> Entry.getDuration (LayoutShiftEntry sampleLayoutShift) |> Expect.equal 0
+        , test "lcp entry returns render time" <|
+            \() -> Entry.getDuration (LargestContentfulPaintEntry sampleLcp) |> Expect.equal 1200.0
+        , test "event entry has duration" <|
+            \() -> Entry.getDuration (EventEntry sampleEvent) |> Expect.equal 80.0
+        ]
+
+
+typeCheckTests : Test
+typeCheckTests =
+    describe "type checks"
+        [ test "isMarkEntry true" <|
+            \() -> Entry.isMarkEntry (MarkEntry sampleMark) |> Expect.equal True
+        , test "isMarkEntry false for measure" <|
+            \() -> Entry.isMarkEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+        , test "isMarkEntry false for long task" <|
+            \() -> Entry.isMarkEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+        , test "isMarkEntry false for layout shift" <|
+            \() -> Entry.isMarkEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+        , test "isMarkEntry false for lcp" <|
+            \() -> Entry.isMarkEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+        , test "isMarkEntry false for event" <|
+            \() -> Entry.isMarkEntry (EventEntry sampleEvent) |> Expect.equal False
+        , test "isMeasureEntry true" <|
+            \() -> Entry.isMeasureEntry (MeasureEntry sampleMeasure) |> Expect.equal True
+        , test "isMeasureEntry false for mark" <|
+            \() -> Entry.isMeasureEntry (MarkEntry sampleMark) |> Expect.equal False
+        , test "isMeasureEntry false for long task" <|
+            \() -> Entry.isMeasureEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+        , test "isMeasureEntry false for layout shift" <|
+            \() -> Entry.isMeasureEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+        , test "isMeasureEntry false for lcp" <|
+            \() -> Entry.isMeasureEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+        , test "isMeasureEntry false for event" <|
+            \() -> Entry.isMeasureEntry (EventEntry sampleEvent) |> Expect.equal False
+        , test "isLongTaskEntry true" <|
+            \() -> Entry.isLongTaskEntry (LongTaskEntry sampleLongTask) |> Expect.equal True
+        , test "isLongTaskEntry false for mark" <|
+            \() -> Entry.isLongTaskEntry (MarkEntry sampleMark) |> Expect.equal False
+        , test "isLongTaskEntry false for measure" <|
+            \() -> Entry.isLongTaskEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+        , test "isLongTaskEntry false for layout shift" <|
+            \() -> Entry.isLongTaskEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+        , test "isLongTaskEntry false for lcp" <|
+            \() -> Entry.isLongTaskEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+        , test "isLongTaskEntry false for event" <|
+            \() -> Entry.isLongTaskEntry (EventEntry sampleEvent) |> Expect.equal False
+        , test "isLayoutShiftEntry true" <|
+            \() -> Entry.isLayoutShiftEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal True
+        , test "isLayoutShiftEntry false for mark" <|
+            \() -> Entry.isLayoutShiftEntry (MarkEntry sampleMark) |> Expect.equal False
+        , test "isLayoutShiftEntry false for measure" <|
+            \() -> Entry.isLayoutShiftEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+        , test "isLayoutShiftEntry false for long task" <|
+            \() -> Entry.isLayoutShiftEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+        , test "isLayoutShiftEntry false for lcp" <|
+            \() -> Entry.isLayoutShiftEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+        , test "isLayoutShiftEntry false for event" <|
+            \() -> Entry.isLayoutShiftEntry (EventEntry sampleEvent) |> Expect.equal False
+        , test "isLcpEntry true" <|
+            \() -> Entry.isLcpEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal True
+        , test "isLcpEntry false for mark" <|
+            \() -> Entry.isLcpEntry (MarkEntry sampleMark) |> Expect.equal False
+        , test "isLcpEntry false for measure" <|
+            \() -> Entry.isLcpEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+        , test "isLcpEntry false for long task" <|
+            \() -> Entry.isLcpEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+        , test "isLcpEntry false for layout shift" <|
+            \() -> Entry.isLcpEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+        , test "isLcpEntry false for event" <|
+            \() -> Entry.isLcpEntry (EventEntry sampleEvent) |> Expect.equal False
+        , test "isEventEntry true" <|
+            \() -> Entry.isEventEntry (EventEntry sampleEvent) |> Expect.equal True
+        , test "isEventEntry false for mark" <|
+            \() -> Entry.isEventEntry (MarkEntry sampleMark) |> Expect.equal False
+        , test "isEventEntry false for measure" <|
+            \() -> Entry.isEventEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+        , test "isEventEntry false for long task" <|
+            \() -> Entry.isEventEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+        , test "isEventEntry false for layout shift" <|
+            \() -> Entry.isEventEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+        , test "isEventEntry false for lcp" <|
+            \() -> Entry.isEventEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+        ]
+
+
+filterTests : Test
+filterTests =
+    describe "filter helpers"
+        [ test "filterMarks returns only marks" <|
+            \() -> Entry.filterMarks allEntries |> List.length |> Expect.equal 2
+        , test "filterMarks returns correct mark" <|
+            \() ->
+                Entry.filterMarks allEntries
+                    |> List.head
+                    |> Maybe.map .name
+                    |> Expect.equal (Just "test-mark")
+        , test "filterMeasures returns only measures" <|
+            \() -> Entry.filterMeasures allEntries |> List.length |> Expect.equal 2
+        , test "filterMeasures returns correct measure" <|
+            \() ->
+                Entry.filterMeasures allEntries
+                    |> List.head
+                    |> Maybe.map .name
+                    |> Expect.equal (Just "test-measure")
+        , test "filterLongTasks returns only long tasks" <|
+            \() -> Entry.filterLongTasks allEntries |> List.length |> Expect.equal 1
+        , test "filterLongTasks returns correct task" <|
+            \() ->
+                Entry.filterLongTasks allEntries
+                    |> List.head
+                    |> Maybe.map .name
+                    |> Expect.equal (Just "self")
+        , test "filterMarks from empty list" <|
+            \() -> Entry.filterMarks [] |> List.length |> Expect.equal 0
+        , test "filterMeasures from empty list" <|
+            \() -> Entry.filterMeasures [] |> List.length |> Expect.equal 0
+        , test "filterLongTasks from empty list" <|
+            \() -> Entry.filterLongTasks [] |> List.length |> Expect.equal 0
+        , test "filterMarks excludes non-marks" <|
+            \() ->
+                Entry.filterMarks [ LongTaskEntry sampleLongTask, EventEntry sampleEvent ]
+                    |> List.length
+                    |> Expect.equal 0
+        , test "filterMeasures excludes non-measures" <|
+            \() ->
+                Entry.filterMeasures [ MarkEntry sampleMark, LongTaskEntry sampleLongTask ]
+                    |> List.length
+                    |> Expect.equal 0
+        , test "filterLongTasks excludes non-tasks" <|
+            \() ->
+                Entry.filterLongTasks [ MarkEntry sampleMark, MeasureEntry sampleMeasure ]
+                    |> List.length
+                    |> Expect.equal 0
+        ]
+
+
+
+-- NAVIGATION TESTS
+
+
+sampleNavTiming : NavigationTiming
+sampleNavTiming =
+    { fetchStart = 0, domainLookupStart = 10, domainLookupEnd = 30
+    , connectStart = 30, connectEnd = 80, secureConnectionStart = 50
+    , requestStart = 80, responseStart = 150, responseEnd = 300
+    , domInteractive = 500, domContentLoadedEventStart = 520
+    , domContentLoadedEventEnd = 550, domComplete = 800
+    , loadEventStart = 800, loadEventEnd = 810
+    , transferSize = 50000, encodedBodySize = 45000, decodedBodySize = 120000
+    }
+
+
+sampleNavTimingNoTls : NavigationTiming
+sampleNavTimingNoTls =
+    { fetchStart = 0, domainLookupStart = 5, domainLookupEnd = 15
+    , connectStart = 15, connectEnd = 40, secureConnectionStart = 0
+    , requestStart = 40, responseStart = 100, responseEnd = 200
+    , domInteractive = 350, domContentLoadedEventStart = 360
+    , domContentLoadedEventEnd = 380, domComplete = 500
+    , loadEventStart = 500, loadEventEnd = 510
+    , transferSize = 30000, encodedBodySize = 28000, decodedBodySize = 80000
+    }
+
+
+navigationTests : Test
+navigationTests =
+    describe "Navigation"
+        [ computeMetricsTests
+        ]
+
+
+computeMetricsTests : Test
+computeMetricsTests =
+    let
+        metrics =
+            Navigation.computeMetrics sampleNavTiming
+
+        metricsNoTls =
+            Navigation.computeMetrics sampleNavTimingNoTls
+    in
+    describe "computeMetrics"
+        [ test "dnsLookup" <|
+            \() -> metrics.dnsLookup |> Expect.equal 20
+        , test "tcpConnection" <|
+            \() -> metrics.tcpConnection |> Expect.equal 50
+        , test "tlsHandshake with HTTPS" <|
+            \() -> metrics.tlsHandshake |> Expect.equal 30
+        , test "tlsHandshake without HTTPS" <|
+            \() -> metricsNoTls.tlsHandshake |> Expect.equal 0
+        , test "ttfb" <|
+            \() -> metrics.ttfb |> Expect.equal 150
+        , test "contentDownload" <|
+            \() -> metrics.contentDownload |> Expect.equal 150
+        , test "domParsing" <|
+            \() -> metrics.domParsing |> Expect.equal 200
+        , test "domContentLoaded" <|
+            \() -> metrics.domContentLoaded |> Expect.equal 550
+        , test "pageLoad" <|
+            \() -> metrics.pageLoad |> Expect.equal 810
+        , test "noTls dnsLookup" <|
+            \() -> metricsNoTls.dnsLookup |> Expect.equal 10
+        , test "noTls tcpConnection" <|
+            \() -> metricsNoTls.tcpConnection |> Expect.equal 25
+        , test "noTls ttfb" <|
+            \() -> metricsNoTls.ttfb |> Expect.equal 100
+        , test "noTls contentDownload" <|
+            \() -> metricsNoTls.contentDownload |> Expect.equal 100
+        , test "noTls domParsing" <|
+            \() -> metricsNoTls.domParsing |> Expect.equal 150
+        , test "noTls domContentLoaded" <|
+            \() -> metricsNoTls.domContentLoaded |> Expect.equal 380
+        , test "noTls pageLoad" <|
+            \() -> metricsNoTls.pageLoad |> Expect.equal 510
+        ]
+
+
+
+-- RESOURCE TESTS
+
+
+sampleResource : ResourceTiming
+sampleResource =
+    { name = "https://example.com/app.js", initiatorType = "script"
+    , startTime = 100.0, duration = 250.0, transferSize = 45000
+    , encodedBodySize = 44000, decodedBodySize = 120000
+    , responseStart = 200.0, responseEnd = 350.0
+    }
+
+
+cachedResource : ResourceTiming
+cachedResource =
+    { name = "https://example.com/cached.css", initiatorType = "css"
+    , startTime = 50.0, duration = 5.0, transferSize = 0
+    , encodedBodySize = 15000, decodedBodySize = 15000
+    , responseStart = 51.0, responseEnd = 55.0
+    }
+
+
+fetchResource : ResourceTiming
+fetchResource =
+    { name = "https://api.example.com/data", initiatorType = "fetch"
+    , startTime = 300.0, duration = 150.0, transferSize = 2000
+    , encodedBodySize = 1800, decodedBodySize = 5000
+    , responseStart = 400.0, responseEnd = 450.0
+    }
+
+
+imageResource : ResourceTiming
+imageResource =
+    { name = "https://cdn.example.com/logo.png", initiatorType = "img"
+    , startTime = 80.0, duration = 60.0, transferSize = 10000
+    , encodedBodySize = 9500, decodedBodySize = 25000
+    , responseStart = 100.0, responseEnd = 140.0
+    }
+
+
+allResources : List ResourceTiming
+allResources =
+    [ sampleResource, cachedResource, fetchResource, imageResource ]
+
+
+resourceTests : Test
+resourceTests =
+    describe "Resource"
+        [ isCachedTests
+        , filterByTypeTests
+        , filterByUrlTests
+        , aggregateTests
+        ]
+
+
+isCachedTests : Test
+isCachedTests =
+    describe "isCached"
+        [ test "false for transferred resource" <|
+            \() -> Resource.isCached sampleResource |> Expect.equal False
+        , test "true for cached resource" <|
+            \() -> Resource.isCached cachedResource |> Expect.equal True
+        , test "false for fetch resource" <|
+            \() -> Resource.isCached fetchResource |> Expect.equal False
+        , test "false for image resource" <|
+            \() -> Resource.isCached imageResource |> Expect.equal False
+        ]
+
+
+filterByTypeTests : Test
+filterByTypeTests =
+    describe "filterByType"
+        [ test "script" <|
+            \() -> Resource.filterByType "script" allResources |> List.length |> Expect.equal 1
+        , test "css" <|
+            \() -> Resource.filterByType "css" allResources |> List.length |> Expect.equal 1
+        , test "fetch" <|
+            \() -> Resource.filterByType "fetch" allResources |> List.length |> Expect.equal 1
+        , test "img" <|
+            \() -> Resource.filterByType "img" allResources |> List.length |> Expect.equal 1
+        , test "unknown type" <|
+            \() -> Resource.filterByType "link" allResources |> List.length |> Expect.equal 0
+        , test "empty list" <|
+            \() -> Resource.filterByType "script" [] |> List.length |> Expect.equal 0
+        , test "returns correct resource" <|
+            \() ->
+                Resource.filterByType "fetch" allResources
+                    |> List.head
+                    |> Maybe.map .name
+                    |> Expect.equal (Just "https://api.example.com/data")
+        ]
+
+
+filterByUrlTests : Test
+filterByUrlTests =
+    describe "filterByUrl"
+        [ test "matching domain" <|
+            \() -> Resource.filterByUrl "example.com" allResources |> List.length |> Expect.equal 4
+        , test "matching api subdomain" <|
+            \() -> Resource.filterByUrl "api.example.com" allResources |> List.length |> Expect.equal 1
+        , test "matching cdn subdomain" <|
+            \() -> Resource.filterByUrl "cdn.example.com" allResources |> List.length |> Expect.equal 1
+        , test "matching file extension" <|
+            \() -> Resource.filterByUrl ".js" allResources |> List.length |> Expect.equal 1
+        , test "no match" <|
+            \() -> Resource.filterByUrl "unknown.com" allResources |> List.length |> Expect.equal 0
+        , test "empty list" <|
+            \() -> Resource.filterByUrl "example.com" [] |> List.length |> Expect.equal 0
+        ]
+
+
+aggregateTests : Test
+aggregateTests =
+    describe "aggregates"
+        [ test "totalTransferSize all resources" <|
+            \() -> Resource.totalTransferSize allResources |> Expect.equal 57000
+        , test "totalTransferSize empty list" <|
+            \() -> Resource.totalTransferSize [] |> Expect.equal 0
+        , test "totalTransferSize single resource" <|
+            \() -> Resource.totalTransferSize [ sampleResource ] |> Expect.equal 45000
+        , test "averageDuration all resources" <|
+            \() -> Resource.averageDuration allResources |> Expect.within (Expect.Absolute 0.01) 116.25
+        , test "averageDuration empty list returns 0" <|
+            \() -> Resource.averageDuration [] |> Expect.equal 0
+        , test "averageDuration single resource" <|
+            \() -> Resource.averageDuration [ sampleResource ] |> Expect.equal 250.0
+        ]
+
+
+
+-- VITALS TESTS
+
+
+vitalsTests : Test
+vitalsTests =
+    describe "Vitals"
+        [ rateTests
+        , thresholdTests
+        , helperTests
+        , vitalsConstructorTests
+        , reportTests
+        ]
+
+
+rateTests : Test
+rateTests =
+    describe "rate"
+        [ test "LCP good" <|
+            \() -> Vitals.rate (Lcp 2100) |> expectRating Good
+        , test "LCP at boundary" <|
+            \() -> Vitals.rate (Lcp 2500) |> expectRating NeedsImprovement
+        , test "LCP needs improvement" <|
+            \() -> Vitals.rate (Lcp 3500) |> expectRating NeedsImprovement
+        , test "LCP at poor boundary" <|
+            \() -> Vitals.rate (Lcp 4000) |> expectRating Poor
+        , test "LCP poor" <|
+            \() -> Vitals.rate (Lcp 5000) |> expectRating Poor
+        , test "LCP zero" <|
+            \() -> Vitals.rate (Lcp 0) |> expectRating Good
+        , test "INP good" <|
+            \() -> Vitals.rate (Inp 150) |> expectRating Good
+        , test "INP at boundary" <|
+            \() -> Vitals.rate (Inp 200) |> expectRating NeedsImprovement
+        , test "INP needs improvement" <|
+            \() -> Vitals.rate (Inp 350) |> expectRating NeedsImprovement
+        , test "INP at poor boundary" <|
+            \() -> Vitals.rate (Inp 500) |> expectRating Poor
+        , test "INP poor" <|
+            \() -> Vitals.rate (Inp 800) |> expectRating Poor
+        , test "INP zero" <|
+            \() -> Vitals.rate (Inp 0) |> expectRating Good
+        , test "CLS good" <|
+            \() -> Vitals.rate (Cls 0.05) |> expectRating Good
+        , test "CLS at boundary" <|
+            \() -> Vitals.rate (Cls 0.1) |> expectRating NeedsImprovement
+        , test "CLS needs improvement" <|
+            \() -> Vitals.rate (Cls 0.18) |> expectRating NeedsImprovement
+        , test "CLS at poor boundary" <|
+            \() -> Vitals.rate (Cls 0.25) |> expectRating Poor
+        , test "CLS poor" <|
+            \() -> Vitals.rate (Cls 0.5) |> expectRating Poor
+        , test "CLS zero" <|
+            \() -> Vitals.rate (Cls 0) |> expectRating Good
+        ]
+
+
+expectRating : Rating -> Rating -> Expect.Expectation
+expectRating expected actual =
+    Expect.equal (Vitals.ratingToString expected) (Vitals.ratingToString actual)
+
+
+thresholdTests : Test
+thresholdTests =
+    describe "thresholds"
+        [ test "lcpThresholds good" <|
+            \() -> Tuple.first Vitals.lcpThresholds |> Expect.equal 2500
+        , test "lcpThresholds poor" <|
+            \() -> Tuple.second Vitals.lcpThresholds |> Expect.equal 4000
+        , test "inpThresholds good" <|
+            \() -> Tuple.first Vitals.inpThresholds |> Expect.equal 200
+        , test "inpThresholds poor" <|
+            \() -> Tuple.second Vitals.inpThresholds |> Expect.equal 500
+        , test "clsThresholds good" <|
+            \() -> Tuple.first Vitals.clsThresholds |> Expect.equal 0.1
+        , test "clsThresholds poor" <|
+            \() -> Tuple.second Vitals.clsThresholds |> Expect.equal 0.25
+        ]
+
+
+helperTests : Test
+helperTests =
+    describe "helpers"
+        [ test "ratingToString Good" <|
+            \() -> Vitals.ratingToString Good |> Expect.equal "good"
+        , test "ratingToString NeedsImprovement" <|
+            \() -> Vitals.ratingToString NeedsImprovement |> Expect.equal "needs-improvement"
+        , test "ratingToString Poor" <|
+            \() -> Vitals.ratingToString Poor |> Expect.equal "poor"
+        , test "vitalToString Lcp" <|
+            \() -> Vitals.vitalToString (Lcp 1000) |> Expect.equal "LCP"
+        , test "vitalToString Inp" <|
+            \() -> Vitals.vitalToString (Inp 100) |> Expect.equal "INP"
+        , test "vitalToString Cls" <|
+            \() -> Vitals.vitalToString (Cls 0.1) |> Expect.equal "CLS"
+        , test "vitalValue Lcp" <|
+            \() -> Vitals.vitalValue (Lcp 2500) |> Expect.equal 2500
+        , test "vitalValue Inp" <|
+            \() -> Vitals.vitalValue (Inp 200) |> Expect.equal 200
+        , test "vitalValue Cls" <|
+            \() -> Vitals.vitalValue (Cls 0.15) |> Expect.equal 0.15
+        ]
+
+
+vitalsConstructorTests : Test
+vitalsConstructorTests =
+    describe "Vitals constructors and helpers"
+        [ test "VitalsReport positional constructor all Nothing" <|
+            \() ->
+                let
+                    report =
+                        VitalsReport Nothing Nothing Nothing
+                in
+                ( report.lcp, report.inp, report.cls )
+                    |> Expect.equal ( Nothing, Nothing, Nothing )
+        , test "VitalsReport positional constructor with values" <|
+            \() ->
+                let
+                    lcpRated =
+                        { value = 1500, rating = Good }
+
+                    report =
+                        VitalsReport (Just lcpRated) Nothing Nothing
+                in
+                report.lcp
+                    |> Maybe.map .value
+                    |> Expect.equal (Just 1500)
+        ]
+
+
+reportTests : Test
+reportTests =
+    describe "VitalsReport"
+        [ test "emptyReport lcp is Nothing" <|
+            \() -> Vitals.emptyReport.lcp |> Expect.equal Nothing
+        , test "emptyReport inp is Nothing" <|
+            \() -> Vitals.emptyReport.inp |> Expect.equal Nothing
+        , test "emptyReport cls is Nothing" <|
+            \() -> Vitals.emptyReport.cls |> Expect.equal Nothing
+        , test "updateReport Lcp sets value" <|
+            \() ->
+                Vitals.updateReport (Lcp 2100) Vitals.emptyReport
+                    |> .lcp
+                    |> Maybe.map .value
+                    |> Expect.equal (Just 2100)
+        , test "updateReport Lcp good rating" <|
+            \() ->
+                Vitals.updateReport (Lcp 2100) Vitals.emptyReport
+                    |> .lcp
+                    |> Maybe.map (\r -> Vitals.ratingToString r.rating)
+                    |> Expect.equal (Just "good")
+        , test "updateReport Inp sets value" <|
+            \() ->
+                Vitals.updateReport (Inp 350) Vitals.emptyReport
+                    |> .inp
+                    |> Maybe.map .value
+                    |> Expect.equal (Just 350)
+        , test "updateReport Inp needs-improvement rating" <|
+            \() ->
+                Vitals.updateReport (Inp 350) Vitals.emptyReport
+                    |> .inp
+                    |> Maybe.map (\r -> Vitals.ratingToString r.rating)
+                    |> Expect.equal (Just "needs-improvement")
+        , test "updateReport Cls sets value" <|
+            \() ->
+                Vitals.updateReport (Cls 0.3) Vitals.emptyReport
+                    |> .cls
+                    |> Maybe.map .value
+                    |> Expect.equal (Just 0.3)
+        , test "updateReport Cls poor rating" <|
+            \() ->
+                Vitals.updateReport (Cls 0.3) Vitals.emptyReport
+                    |> .cls
+                    |> Maybe.map (\r -> Vitals.ratingToString r.rating)
+                    |> Expect.equal (Just "poor")
+        , test "updateReport preserves other fields" <|
+            \() ->
+                Vitals.emptyReport
+                    |> Vitals.updateReport (Lcp 1000)
+                    |> Vitals.updateReport (Inp 100)
+                    |> .lcp
+                    |> Maybe.map .value
+                    |> Expect.equal (Just 1000)
+        , test "updateReport replaces existing" <|
+            \() ->
+                Vitals.emptyReport
+                    |> Vitals.updateReport (Lcp 1000)
+                    |> Vitals.updateReport (Lcp 3000)
+                    |> .lcp
+                    |> Maybe.map .value
+                    |> Expect.equal (Just 3000)
+        , test "full pipeline all set" <|
+            \() ->
+                Vitals.emptyReport
+                    |> Vitals.updateReport (Lcp 1500)
+                    |> Vitals.updateReport (Inp 100)
+                    |> Vitals.updateReport (Cls 0.05)
+                    |> .cls
+                    |> Maybe.map .value
+                    |> Expect.equal (Just 0.05)
+        ]
+
+
+
+-- OBSERVER TESTS
+
+
+observerTests : Test
+observerTests =
+    describe "Observer"
+        [ entryTypeToStringTests
+        , observeConfigTests
+        ]
+
+
+entryTypeToStringTests : Test
+entryTypeToStringTests =
+    describe "entryTypeToString"
+        [ test "Marks" <|
+            \() -> Observer.entryTypeToString Marks |> Expect.equal "mark"
+        , test "Measures" <|
+            \() -> Observer.entryTypeToString Measures |> Expect.equal "measure"
+        , test "NavigationEntries" <|
+            \() -> Observer.entryTypeToString NavigationEntries |> Expect.equal "navigation"
+        , test "ResourceEntries" <|
+            \() -> Observer.entryTypeToString ResourceEntries |> Expect.equal "resource"
+        , test "LongTasks" <|
+            \() -> Observer.entryTypeToString LongTasks |> Expect.equal "longtask"
+        , test "LayoutShifts" <|
+            \() -> Observer.entryTypeToString LayoutShifts |> Expect.equal "layout-shift"
+        , test "LargestContentfulPaints" <|
+            \() -> Observer.entryTypeToString LargestContentfulPaints |> Expect.equal "largest-contentful-paint"
+        , test "EventTimings" <|
+            \() -> Observer.entryTypeToString EventTimings |> Expect.equal "event"
+        ]
+
+
+observeConfigTests : Test
+observeConfigTests =
+    describe "ObserveConfig"
+        [ test "config entryTypes" <|
+            \() ->
+                let
+                    config =
+                        { entryTypes = [ Marks, Measures ], buffered = False, onEntries = identity }
+                in
+                List.length config.entryTypes |> Expect.equal 2
+        , test "config buffered" <|
+            \() ->
+                let
+                    config =
+                        { entryTypes = [ LongTasks ], buffered = True, onEntries = identity }
+                in
+                config.buffered |> Expect.equal True
+        , test "map entry types to strings" <|
+            \() ->
+                List.map Observer.entryTypeToString [ Marks, Measures, LongTasks, LayoutShifts ]
+                    |> Expect.equal [ "mark", "measure", "longtask", "layout-shift" ]
+        , test "all entry types mapped" <|
+            \() ->
+                List.map Observer.entryTypeToString
+                    [ Marks, Measures, NavigationEntries, ResourceEntries
+                    , LongTasks, LayoutShifts, LargestContentfulPaints, EventTimings
+                    ]
+                    |> List.length
+                    |> Expect.equal 8
+        ]
+
+
+{-| Tests that exercise Performance module Cmd-producing and Task-producing
+functions. Calling these functions covers their function definition coverage
+points even though we cannot dispatch the Cmds without an effect manager.
+-}
+performanceCmdTests : Test
+performanceCmdTests =
+    describe "Performance Cmd constructors"
+        [ test "mark produces a Cmd" <|
+            \() ->
+                let
+                    cmd =
+                        Performance.mark "test-mark"
+                in
+                Expect.pass
+        , test "markWithDetail produces a Cmd" <|
+            \() ->
+                let
+                    cmd =
+                        Performance.markWithDetail "test-mark" (Json.Encode.string "detail")
+                in
+                Expect.pass
+        , test "measure produces a Cmd" <|
+            \() ->
+                let
+                    cmd =
+                        Performance.measure "test-measure" "start" "end"
+                in
+                Expect.pass
+        , test "measureFromMark produces a Cmd" <|
+            \() ->
+                let
+                    cmd =
+                        Performance.measureFromMark "test-measure" "start"
+                in
+                Expect.pass
+        , test "measureWithDetail produces a Cmd" <|
+            \() ->
+                let
+                    cmd =
+                        Performance.measureWithDetail "test-measure" "start" "end" (Json.Encode.int 1)
+                in
+                Expect.pass
+        , test "clearMarks produces a Cmd" <|
+            \() ->
+                let
+                    cmd =
+                        Performance.clearMarks "test-mark"
+                in
+                Expect.pass
+        , test "clearAllMarks produces a Cmd" <|
+            \() ->
+                let
+                    cmd =
+                        Performance.clearAllMarks
+                in
+                Expect.pass
+        , test "clearMeasures produces a Cmd" <|
+            \() ->
+                let
+                    cmd =
+                        Performance.clearMeasures "test-measure"
+                in
+                Expect.pass
+        , test "clearAllMeasures produces a Cmd" <|
+            \() ->
+                let
+                    cmd =
+                        Performance.clearAllMeasures
+                in
+                Expect.pass
+        ]

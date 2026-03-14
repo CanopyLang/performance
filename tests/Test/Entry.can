@@ -1,0 +1,397 @@
+module Test.Entry exposing (main, tests)
+
+import Basics exposing (..)
+import Expect
+import Json.Encode
+import Performance.Entry as Entry exposing (Entry(..))
+import Test exposing (..)
+
+
+main : Test
+main =
+    tests
+
+
+tests : Test
+tests =
+    describe "Performance.Entry"
+        [ describe "getName" getNameTests
+        , describe "getStartTime" getStartTimeTests
+        , describe "getDuration" getDurationTests
+        , describe "isMarkEntry" isMarkEntryTests
+        , describe "isMeasureEntry" isMeasureEntryTests
+        , describe "isLongTaskEntry" isLongTaskEntryTests
+        , describe "isLayoutShiftEntry" isLayoutShiftEntryTests
+        , describe "isLcpEntry" isLcpEntryTests
+        , describe "isEventEntry" isEventEntryTests
+        , describe "filterMarks" filterMarksTests
+        , describe "filterMeasures" filterMeasuresTests
+        , describe "filterLongTasks" filterLongTasksTests
+        ]
+
+
+
+-- SAMPLE DATA
+
+
+{-| Use positional constructor Mark name startTime detail to hit coverage point. -}
+sampleMark : Entry.Mark
+sampleMark =
+    Entry.Mark "render-start" 100.5 Nothing
+
+
+{-| Use positional constructor to cover Mark constructor coverage point. -}
+sampleMarkWithDetail : Entry.Mark
+sampleMarkWithDetail =
+    Entry.Mark "api-call" 200.0 (Just (Json.Encode.string "endpoint"))
+
+
+{-| Use positional constructor Measure name startTime duration detail. -}
+sampleMeasure : Entry.Measure
+sampleMeasure =
+    Entry.Measure "render-time" 100.0 50.5 Nothing
+
+
+sampleMeasureWithDetail : Entry.Measure
+sampleMeasureWithDetail =
+    Entry.Measure "fetch-duration" 150.0 75.0 (Just (Json.Encode.int 42))
+
+
+{-| Use positional constructor LongTask name startTime duration. -}
+sampleLongTask : Entry.LongTask
+sampleLongTask =
+    Entry.LongTask "self" 500.0 120.0
+
+
+{-| Use positional constructor LayoutShift value startTime hadRecentInput. -}
+sampleLayoutShift : Entry.LayoutShift
+sampleLayoutShift =
+    Entry.LayoutShift 0.15 800.0 False
+
+
+sampleLayoutShiftWithInput : Entry.LayoutShift
+sampleLayoutShiftWithInput =
+    Entry.LayoutShift 0.05 900.0 True
+
+
+{-| Use positional constructor LcpEntry startTime renderTime loadTime size element url. -}
+sampleLcp : Entry.LcpEntry
+sampleLcp =
+    Entry.LcpEntry 1200.0 1200.0 1100.0 50000 (Just "IMG") (Just "https://example.com/hero.jpg")
+
+
+sampleLcpNoElement : Entry.LcpEntry
+sampleLcpNoElement =
+    Entry.LcpEntry 800.0 800.0 0.0 30000 Nothing Nothing
+
+
+{-| Use positional constructor EventTiming name startTime processingStart processingEnd duration interactionId. -}
+sampleEvent : Entry.EventTiming
+sampleEvent =
+    Entry.EventTiming "click" 2000.0 2010.0 2050.0 80.0 7
+
+
+mixedEntries : List Entry
+mixedEntries =
+    [ MarkEntry sampleMark
+    , MarkEntry sampleMarkWithDetail
+    , MeasureEntry sampleMeasure
+    , MeasureEntry sampleMeasureWithDetail
+    , LongTaskEntry sampleLongTask
+    , LayoutShiftEntry sampleLayoutShift
+    , LargestContentfulPaintEntry sampleLcp
+    , EventEntry sampleEvent
+    ]
+
+
+
+-- getName TESTS
+
+
+getNameTests : List Test
+getNameTests =
+    [ test "returns name from a mark entry" <|
+        \() -> Entry.getName (MarkEntry sampleMark) |> Expect.equal "render-start"
+    , test "returns name from a mark entry with detail" <|
+        \() -> Entry.getName (MarkEntry sampleMarkWithDetail) |> Expect.equal "api-call"
+    , test "returns name from a measure entry" <|
+        \() -> Entry.getName (MeasureEntry sampleMeasure) |> Expect.equal "render-time"
+    , test "returns name from a long task entry" <|
+        \() -> Entry.getName (LongTaskEntry sampleLongTask) |> Expect.equal "self"
+    , test "returns layout-shift for layout shift entries" <|
+        \() -> Entry.getName (LayoutShiftEntry sampleLayoutShift) |> Expect.equal "layout-shift"
+    , test "returns largest-contentful-paint for LCP entries" <|
+        \() -> Entry.getName (LargestContentfulPaintEntry sampleLcp) |> Expect.equal "largest-contentful-paint"
+    , test "returns event name from event entry" <|
+        \() -> Entry.getName (EventEntry sampleEvent) |> Expect.equal "click"
+    ]
+
+
+
+-- getStartTime TESTS
+
+
+getStartTimeTests : List Test
+getStartTimeTests =
+    [ test "mark start time" <|
+        \() -> Entry.getStartTime (MarkEntry sampleMark) |> Expect.equal 100.5
+    , test "measure start time" <|
+        \() -> Entry.getStartTime (MeasureEntry sampleMeasure) |> Expect.equal 100.0
+    , test "long task start time" <|
+        \() -> Entry.getStartTime (LongTaskEntry sampleLongTask) |> Expect.equal 500.0
+    , test "layout shift start time" <|
+        \() -> Entry.getStartTime (LayoutShiftEntry sampleLayoutShift) |> Expect.equal 800.0
+    , test "lcp start time" <|
+        \() -> Entry.getStartTime (LargestContentfulPaintEntry sampleLcp) |> Expect.equal 1200.0
+    , test "event start time" <|
+        \() -> Entry.getStartTime (EventEntry sampleEvent) |> Expect.equal 2000.0
+    , test "layout shift with input start time" <|
+        \() -> Entry.getStartTime (LayoutShiftEntry sampleLayoutShiftWithInput) |> Expect.equal 900.0
+    , test "lcp without element start time" <|
+        \() -> Entry.getStartTime (LargestContentfulPaintEntry sampleLcpNoElement) |> Expect.equal 800.0
+    ]
+
+
+
+-- getDuration TESTS
+
+
+getDurationTests : List Test
+getDurationTests =
+    [ test "mark has zero duration" <|
+        \() -> Entry.getDuration (MarkEntry sampleMark) |> Expect.equal 0
+    , test "measure has its recorded duration" <|
+        \() -> Entry.getDuration (MeasureEntry sampleMeasure) |> Expect.equal 50.5
+    , test "measure with detail has its duration" <|
+        \() -> Entry.getDuration (MeasureEntry sampleMeasureWithDetail) |> Expect.equal 75.0
+    , test "long task has its duration" <|
+        \() -> Entry.getDuration (LongTaskEntry sampleLongTask) |> Expect.equal 120.0
+    , test "layout shift has zero duration" <|
+        \() -> Entry.getDuration (LayoutShiftEntry sampleLayoutShift) |> Expect.equal 0
+    , test "lcp returns render time as duration" <|
+        \() -> Entry.getDuration (LargestContentfulPaintEntry sampleLcp) |> Expect.equal 1200.0
+    , test "lcp without element returns render time" <|
+        \() -> Entry.getDuration (LargestContentfulPaintEntry sampleLcpNoElement) |> Expect.equal 800.0
+    , test "event entry has its duration" <|
+        \() -> Entry.getDuration (EventEntry sampleEvent) |> Expect.equal 80.0
+    ]
+
+
+
+-- isMarkEntry TESTS
+
+
+isMarkEntryTests : List Test
+isMarkEntryTests =
+    [ test "true for MarkEntry" <|
+        \() -> Entry.isMarkEntry (MarkEntry sampleMark) |> Expect.equal True
+    , test "false for MeasureEntry" <|
+        \() -> Entry.isMarkEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+    , test "false for LongTaskEntry" <|
+        \() -> Entry.isMarkEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+    , test "false for LayoutShiftEntry" <|
+        \() -> Entry.isMarkEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+    , test "false for LargestContentfulPaintEntry" <|
+        \() -> Entry.isMarkEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+    , test "false for EventEntry" <|
+        \() -> Entry.isMarkEntry (EventEntry sampleEvent) |> Expect.equal False
+    ]
+
+
+
+-- isMeasureEntry TESTS
+
+
+isMeasureEntryTests : List Test
+isMeasureEntryTests =
+    [ test "true for MeasureEntry" <|
+        \() -> Entry.isMeasureEntry (MeasureEntry sampleMeasure) |> Expect.equal True
+    , test "false for MarkEntry" <|
+        \() -> Entry.isMeasureEntry (MarkEntry sampleMark) |> Expect.equal False
+    , test "false for LongTaskEntry" <|
+        \() -> Entry.isMeasureEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+    , test "false for LayoutShiftEntry" <|
+        \() -> Entry.isMeasureEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+    , test "false for LargestContentfulPaintEntry" <|
+        \() -> Entry.isMeasureEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+    , test "false for EventEntry" <|
+        \() -> Entry.isMeasureEntry (EventEntry sampleEvent) |> Expect.equal False
+    ]
+
+
+
+-- isLongTaskEntry TESTS
+
+
+isLongTaskEntryTests : List Test
+isLongTaskEntryTests =
+    [ test "true for LongTaskEntry" <|
+        \() -> Entry.isLongTaskEntry (LongTaskEntry sampleLongTask) |> Expect.equal True
+    , test "false for MarkEntry" <|
+        \() -> Entry.isLongTaskEntry (MarkEntry sampleMark) |> Expect.equal False
+    , test "false for MeasureEntry" <|
+        \() -> Entry.isLongTaskEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+    , test "false for LayoutShiftEntry" <|
+        \() -> Entry.isLongTaskEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+    , test "false for LargestContentfulPaintEntry" <|
+        \() -> Entry.isLongTaskEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+    , test "false for EventEntry" <|
+        \() -> Entry.isLongTaskEntry (EventEntry sampleEvent) |> Expect.equal False
+    ]
+
+
+
+-- isLayoutShiftEntry TESTS
+
+
+isLayoutShiftEntryTests : List Test
+isLayoutShiftEntryTests =
+    [ test "true for LayoutShiftEntry" <|
+        \() -> Entry.isLayoutShiftEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal True
+    , test "false for MarkEntry" <|
+        \() -> Entry.isLayoutShiftEntry (MarkEntry sampleMark) |> Expect.equal False
+    , test "false for MeasureEntry" <|
+        \() -> Entry.isLayoutShiftEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+    , test "false for LongTaskEntry" <|
+        \() -> Entry.isLayoutShiftEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+    , test "false for LargestContentfulPaintEntry" <|
+        \() -> Entry.isLayoutShiftEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+    , test "false for EventEntry" <|
+        \() -> Entry.isLayoutShiftEntry (EventEntry sampleEvent) |> Expect.equal False
+    ]
+
+
+
+-- isLcpEntry TESTS
+
+
+isLcpEntryTests : List Test
+isLcpEntryTests =
+    [ test "true for LargestContentfulPaintEntry" <|
+        \() -> Entry.isLcpEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal True
+    , test "false for MarkEntry" <|
+        \() -> Entry.isLcpEntry (MarkEntry sampleMark) |> Expect.equal False
+    , test "false for MeasureEntry" <|
+        \() -> Entry.isLcpEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+    , test "false for LongTaskEntry" <|
+        \() -> Entry.isLcpEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+    , test "false for LayoutShiftEntry" <|
+        \() -> Entry.isLcpEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+    , test "false for EventEntry" <|
+        \() -> Entry.isLcpEntry (EventEntry sampleEvent) |> Expect.equal False
+    ]
+
+
+
+-- isEventEntry TESTS
+
+
+isEventEntryTests : List Test
+isEventEntryTests =
+    [ test "true for EventEntry" <|
+        \() -> Entry.isEventEntry (EventEntry sampleEvent) |> Expect.equal True
+    , test "false for MarkEntry" <|
+        \() -> Entry.isEventEntry (MarkEntry sampleMark) |> Expect.equal False
+    , test "false for MeasureEntry" <|
+        \() -> Entry.isEventEntry (MeasureEntry sampleMeasure) |> Expect.equal False
+    , test "false for LongTaskEntry" <|
+        \() -> Entry.isEventEntry (LongTaskEntry sampleLongTask) |> Expect.equal False
+    , test "false for LayoutShiftEntry" <|
+        \() -> Entry.isEventEntry (LayoutShiftEntry sampleLayoutShift) |> Expect.equal False
+    , test "false for LargestContentfulPaintEntry" <|
+        \() -> Entry.isEventEntry (LargestContentfulPaintEntry sampleLcp) |> Expect.equal False
+    ]
+
+
+
+-- filterMarks TESTS
+
+
+filterMarksTests : List Test
+filterMarksTests =
+    [ test "extracts marks from mixed list" <|
+        \() -> Entry.filterMarks mixedEntries |> List.length |> Expect.equal 2
+    , test "first extracted mark has correct name" <|
+        \() ->
+            Entry.filterMarks mixedEntries
+                |> List.head
+                |> Maybe.map .name
+                |> Expect.equal (Just "render-start")
+    , test "preserves mark detail field" <|
+        \() ->
+            Entry.filterMarks mixedEntries
+                |> List.reverse
+                |> List.head
+                |> Maybe.andThen .detail
+                |> Maybe.map (\_ -> True)
+                |> Expect.equal (Just True)
+    , test "returns empty list from empty input" <|
+        \() -> Entry.filterMarks [] |> Expect.equal []
+    , test "returns empty list when no marks present" <|
+        \() ->
+            Entry.filterMarks [ LongTaskEntry sampleLongTask, EventEntry sampleEvent ]
+                |> Expect.equal []
+    , test "returns all marks when input is only marks" <|
+        \() ->
+            Entry.filterMarks [ MarkEntry sampleMark, MarkEntry sampleMarkWithDetail ]
+                |> List.length
+                |> Expect.equal 2
+    ]
+
+
+
+-- filterMeasures TESTS
+
+
+filterMeasuresTests : List Test
+filterMeasuresTests =
+    [ test "extracts measures from mixed list" <|
+        \() -> Entry.filterMeasures mixedEntries |> List.length |> Expect.equal 2
+    , test "first extracted measure has correct name" <|
+        \() ->
+            Entry.filterMeasures mixedEntries
+                |> List.head
+                |> Maybe.map .name
+                |> Expect.equal (Just "render-time")
+    , test "preserves measure duration" <|
+        \() ->
+            Entry.filterMeasures mixedEntries
+                |> List.head
+                |> Maybe.map .duration
+                |> Expect.equal (Just 50.5)
+    , test "returns empty list from empty input" <|
+        \() -> Entry.filterMeasures [] |> Expect.equal []
+    , test "returns empty list when no measures present" <|
+        \() ->
+            Entry.filterMeasures [ MarkEntry sampleMark, LongTaskEntry sampleLongTask ]
+                |> Expect.equal []
+    ]
+
+
+
+-- filterLongTasks TESTS
+
+
+filterLongTasksTests : List Test
+filterLongTasksTests =
+    [ test "extracts long tasks from mixed list" <|
+        \() -> Entry.filterLongTasks mixedEntries |> List.length |> Expect.equal 1
+    , test "extracted long task has correct name" <|
+        \() ->
+            Entry.filterLongTasks mixedEntries
+                |> List.head
+                |> Maybe.map .name
+                |> Expect.equal (Just "self")
+    , test "extracted long task has correct duration" <|
+        \() ->
+            Entry.filterLongTasks mixedEntries
+                |> List.head
+                |> Maybe.map .duration
+                |> Expect.equal (Just 120.0)
+    , test "returns empty list from empty input" <|
+        \() -> Entry.filterLongTasks [] |> Expect.equal []
+    , test "returns empty list when no long tasks present" <|
+        \() ->
+            Entry.filterLongTasks [ MarkEntry sampleMark, MeasureEntry sampleMeasure ]
+                |> Expect.equal []
+    ]

@@ -1,0 +1,259 @@
+module Test.Navigation exposing (main, tests)
+
+import Basics exposing (..)
+import Expect
+import Performance.Navigation as Navigation exposing (NavigationTiming, NavigationMetrics)
+import Test exposing (..)
+
+
+main : Test
+main =
+    tests
+
+
+tests : Test
+tests =
+    describe "Performance.Navigation"
+        [ describe "computeMetrics with HTTPS" httpsMetricsTests
+        , describe "computeMetrics without HTTPS" httpMetricsTests
+        , describe "computeMetrics edge cases" edgeCaseTests
+        , describe "positional constructors" positionalConstructorTests
+        ]
+
+
+
+-- SAMPLE DATA
+
+
+httpsTiming : NavigationTiming
+httpsTiming =
+    { fetchStart = 0
+    , domainLookupStart = 10
+    , domainLookupEnd = 30
+    , connectStart = 30
+    , connectEnd = 80
+    , secureConnectionStart = 50
+    , requestStart = 80
+    , responseStart = 150
+    , responseEnd = 300
+    , domInteractive = 500
+    , domContentLoadedEventStart = 520
+    , domContentLoadedEventEnd = 550
+    , domComplete = 800
+    , loadEventStart = 800
+    , loadEventEnd = 810
+    , transferSize = 50000
+    , encodedBodySize = 45000
+    , decodedBodySize = 120000
+    }
+
+
+httpTiming : NavigationTiming
+httpTiming =
+    { fetchStart = 0
+    , domainLookupStart = 5
+    , domainLookupEnd = 15
+    , connectStart = 15
+    , connectEnd = 40
+    , secureConnectionStart = 0
+    , requestStart = 40
+    , responseStart = 100
+    , responseEnd = 200
+    , domInteractive = 350
+    , domContentLoadedEventStart = 360
+    , domContentLoadedEventEnd = 380
+    , domComplete = 500
+    , loadEventStart = 500
+    , loadEventEnd = 510
+    , transferSize = 30000
+    , encodedBodySize = 28000
+    , decodedBodySize = 80000
+    }
+
+
+zeroTiming : NavigationTiming
+zeroTiming =
+    { fetchStart = 0
+    , domainLookupStart = 0
+    , domainLookupEnd = 0
+    , connectStart = 0
+    , connectEnd = 0
+    , secureConnectionStart = 0
+    , requestStart = 0
+    , responseStart = 0
+    , responseEnd = 0
+    , domInteractive = 0
+    , domContentLoadedEventStart = 0
+    , domContentLoadedEventEnd = 0
+    , domComplete = 0
+    , loadEventStart = 0
+    , loadEventEnd = 0
+    , transferSize = 0
+    , encodedBodySize = 0
+    , decodedBodySize = 0
+    }
+
+
+fastTiming : NavigationTiming
+fastTiming =
+    { fetchStart = 0
+    , domainLookupStart = 0
+    , domainLookupEnd = 1
+    , connectStart = 1
+    , connectEnd = 5
+    , secureConnectionStart = 2
+    , requestStart = 5
+    , responseStart = 10
+    , responseEnd = 15
+    , domInteractive = 20
+    , domContentLoadedEventStart = 20
+    , domContentLoadedEventEnd = 22
+    , domComplete = 30
+    , loadEventStart = 30
+    , loadEventEnd = 32
+    , transferSize = 5000
+    , encodedBodySize = 4500
+    , decodedBodySize = 10000
+    }
+
+
+
+-- HTTPS METRICS TESTS
+
+
+httpsMetricsTests : List Test
+httpsMetricsTests =
+    let
+        metrics =
+            Navigation.computeMetrics httpsTiming
+    in
+    [ test "dnsLookup is domainLookupEnd - domainLookupStart" <|
+        \() -> metrics.dnsLookup |> Expect.equal 20
+    , test "tcpConnection is connectEnd - connectStart" <|
+        \() -> metrics.tcpConnection |> Expect.equal 50
+    , test "tlsHandshake is connectEnd - secureConnectionStart when HTTPS" <|
+        \() -> metrics.tlsHandshake |> Expect.equal 30
+    , test "ttfb is responseStart - fetchStart" <|
+        \() -> metrics.ttfb |> Expect.equal 150
+    , test "contentDownload is responseEnd - responseStart" <|
+        \() -> metrics.contentDownload |> Expect.equal 150
+    , test "domParsing is domInteractive - responseEnd" <|
+        \() -> metrics.domParsing |> Expect.equal 200
+    , test "domContentLoaded is domContentLoadedEventEnd - fetchStart" <|
+        \() -> metrics.domContentLoaded |> Expect.equal 550
+    , test "pageLoad is loadEventEnd - fetchStart" <|
+        \() -> metrics.pageLoad |> Expect.equal 810
+    ]
+
+
+
+-- HTTP METRICS TESTS
+
+
+httpMetricsTests : List Test
+httpMetricsTests =
+    let
+        metrics =
+            Navigation.computeMetrics httpTiming
+    in
+    [ test "dnsLookup" <|
+        \() -> metrics.dnsLookup |> Expect.equal 10
+    , test "tcpConnection" <|
+        \() -> metrics.tcpConnection |> Expect.equal 25
+    , test "tlsHandshake is 0 when secureConnectionStart is 0" <|
+        \() -> metrics.tlsHandshake |> Expect.equal 0
+    , test "ttfb" <|
+        \() -> metrics.ttfb |> Expect.equal 100
+    , test "contentDownload" <|
+        \() -> metrics.contentDownload |> Expect.equal 100
+    , test "domParsing" <|
+        \() -> metrics.domParsing |> Expect.equal 150
+    , test "domContentLoaded" <|
+        \() -> metrics.domContentLoaded |> Expect.equal 380
+    , test "pageLoad" <|
+        \() -> metrics.pageLoad |> Expect.equal 510
+    ]
+
+
+
+-- EDGE CASE TESTS
+
+
+edgeCaseTests : List Test
+edgeCaseTests =
+    let
+        zeroMetrics =
+            Navigation.computeMetrics zeroTiming
+
+        fastMetrics =
+            Navigation.computeMetrics fastTiming
+    in
+    [ test "all-zero timing produces zero dnsLookup" <|
+        \() -> zeroMetrics.dnsLookup |> Expect.equal 0
+    , test "all-zero timing produces zero tcpConnection" <|
+        \() -> zeroMetrics.tcpConnection |> Expect.equal 0
+    , test "all-zero timing produces zero tlsHandshake" <|
+        \() -> zeroMetrics.tlsHandshake |> Expect.equal 0
+    , test "all-zero timing produces zero ttfb" <|
+        \() -> zeroMetrics.ttfb |> Expect.equal 0
+    , test "all-zero timing produces zero contentDownload" <|
+        \() -> zeroMetrics.contentDownload |> Expect.equal 0
+    , test "all-zero timing produces zero domParsing" <|
+        \() -> zeroMetrics.domParsing |> Expect.equal 0
+    , test "all-zero timing produces zero pageLoad" <|
+        \() -> zeroMetrics.pageLoad |> Expect.equal 0
+    , test "fast page dnsLookup" <|
+        \() -> fastMetrics.dnsLookup |> Expect.equal 1
+    , test "fast page tcpConnection" <|
+        \() -> fastMetrics.tcpConnection |> Expect.equal 4
+    , test "fast page tlsHandshake with HTTPS" <|
+        \() -> fastMetrics.tlsHandshake |> Expect.equal 3
+    , test "fast page ttfb" <|
+        \() -> fastMetrics.ttfb |> Expect.equal 10
+    , test "fast page contentDownload" <|
+        \() -> fastMetrics.contentDownload |> Expect.equal 5
+    , test "fast page domParsing" <|
+        \() -> fastMetrics.domParsing |> Expect.equal 5
+    , test "fast page domContentLoaded" <|
+        \() -> fastMetrics.domContentLoaded |> Expect.equal 22
+    , test "fast page pageLoad" <|
+        \() -> fastMetrics.pageLoad |> Expect.equal 32
+    ]
+
+
+{-| Test positional NavigationTiming and NavigationMetrics constructors
+to cover the type alias record constructor coverage points.
+NavigationTiming: fetchStart domainLookupStart domainLookupEnd connectStart connectEnd
+  secureConnectionStart requestStart responseStart responseEnd domInteractive
+  domContentLoadedEventStart domContentLoadedEventEnd domComplete loadEventStart
+  loadEventEnd transferSize encodedBodySize decodedBodySize
+NavigationMetrics: dnsLookup tcpConnection tlsHandshake ttfb contentDownload
+  domParsing domContentLoaded pageLoad
+-}
+positionalConstructorTests : List Test
+positionalConstructorTests =
+    [ test "NavigationTiming positional constructor" <|
+        \() ->
+            let
+                timing =
+                    NavigationTiming 0 10 30 30 80 50 80 150 300 500 520 550 800 800 810 50000 45000 120000
+
+                metrics =
+                    Navigation.computeMetrics timing
+            in
+            metrics.dnsLookup |> Expect.equal 20
+    , test "NavigationMetrics positional constructor" <|
+        \() ->
+            let
+                metrics =
+                    NavigationMetrics 20 50 30 150 150 200 550 810
+            in
+            metrics.dnsLookup |> Expect.equal 20
+    , test "NavigationMetrics positional constructor ttfb field" <|
+        \() ->
+            let
+                metrics =
+                    NavigationMetrics 10 25 0 100 100 150 380 510
+            in
+            metrics.ttfb |> Expect.equal 100
+    ]

@@ -1,0 +1,174 @@
+module Test.Resource exposing (main, tests)
+
+import Basics exposing (..)
+import Expect
+import Performance.Resource as Resource exposing (ResourceTiming)
+import Test exposing (..)
+
+
+main : Test
+main =
+    tests
+
+
+tests : Test
+tests =
+    describe "Performance.Resource"
+        [ describe "isCached" isCachedTests
+        , describe "filterByType" filterByTypeTests
+        , describe "filterByUrl" filterByUrlTests
+        , describe "totalTransferSize" totalTransferSizeTests
+        , describe "averageDuration" averageDurationTests
+        ]
+
+
+
+-- SAMPLE DATA
+
+
+{-| Use positional constructor ResourceTiming name initiatorType startTime
+duration transferSize encodedBodySize decodedBodySize responseStart responseEnd
+to cover the type alias record constructor coverage point.
+-}
+scriptResource : ResourceTiming
+scriptResource =
+    ResourceTiming "https://example.com/app.js" "script" 100.0 250.0 45000 44000 120000 200.0 350.0
+
+
+cachedCss : ResourceTiming
+cachedCss =
+    ResourceTiming "https://example.com/styles.css" "css" 50.0 5.0 0 15000 15000 51.0 55.0
+
+
+fetchApi : ResourceTiming
+fetchApi =
+    ResourceTiming "https://api.example.com/users" "fetch" 300.0 150.0 2000 1800 5000 400.0 450.0
+
+
+imageResource : ResourceTiming
+imageResource =
+    ResourceTiming "https://cdn.example.com/logo.png" "img" 80.0 60.0 10000 9500 25000 100.0 140.0
+
+
+secondScript : ResourceTiming
+secondScript =
+    ResourceTiming "https://example.com/vendor.js" "script" 110.0 300.0 80000 78000 200000 220.0 410.0
+
+
+allResources : List ResourceTiming
+allResources =
+    [ scriptResource, cachedCss, fetchApi, imageResource, secondScript ]
+
+
+
+-- isCached TESTS
+
+
+isCachedTests : List Test
+isCachedTests =
+    [ test "resource with non-zero transferSize is not cached" <|
+        \() -> Resource.isCached scriptResource |> Expect.equal False
+    , test "resource with zero transferSize is cached" <|
+        \() -> Resource.isCached cachedCss |> Expect.equal True
+    , test "fetch resource with transfer size is not cached" <|
+        \() -> Resource.isCached fetchApi |> Expect.equal False
+    , test "image resource with transfer size is not cached" <|
+        \() -> Resource.isCached imageResource |> Expect.equal False
+    ]
+
+
+
+-- filterByType TESTS
+
+
+filterByTypeTests : List Test
+filterByTypeTests =
+    [ test "filters script resources" <|
+        \() -> Resource.filterByType "script" allResources |> List.length |> Expect.equal 2
+    , test "filters css resources" <|
+        \() -> Resource.filterByType "css" allResources |> List.length |> Expect.equal 1
+    , test "filters fetch resources" <|
+        \() -> Resource.filterByType "fetch" allResources |> List.length |> Expect.equal 1
+    , test "filters img resources" <|
+        \() -> Resource.filterByType "img" allResources |> List.length |> Expect.equal 1
+    , test "returns empty for unmatched type" <|
+        \() -> Resource.filterByType "link" allResources |> Expect.equal []
+    , test "returns empty from empty input" <|
+        \() -> Resource.filterByType "script" [] |> Expect.equal []
+    , test "preserves resource names" <|
+        \() ->
+            Resource.filterByType "fetch" allResources
+                |> List.head
+                |> Maybe.map .name
+                |> Expect.equal (Just "https://api.example.com/users")
+    , test "returns both scripts in order" <|
+        \() ->
+            Resource.filterByType "script" allResources
+                |> List.map .name
+                |> Expect.equal [ "https://example.com/app.js", "https://example.com/vendor.js" ]
+    ]
+
+
+
+-- filterByUrl TESTS
+
+
+filterByUrlTests : List Test
+filterByUrlTests =
+    [ test "matches domain substring" <|
+        \() -> Resource.filterByUrl "example.com" allResources |> List.length |> Expect.equal 5
+    , test "matches api subdomain" <|
+        \() -> Resource.filterByUrl "api.example.com" allResources |> List.length |> Expect.equal 1
+    , test "matches cdn subdomain" <|
+        \() -> Resource.filterByUrl "cdn.example.com" allResources |> List.length |> Expect.equal 1
+    , test "matches file extension" <|
+        \() -> Resource.filterByUrl ".js" allResources |> List.length |> Expect.equal 2
+    , test "matches css extension" <|
+        \() -> Resource.filterByUrl ".css" allResources |> List.length |> Expect.equal 1
+    , test "matches png extension" <|
+        \() -> Resource.filterByUrl ".png" allResources |> List.length |> Expect.equal 1
+    , test "returns empty for no match" <|
+        \() -> Resource.filterByUrl "unknown.com" allResources |> Expect.equal []
+    , test "returns empty from empty input" <|
+        \() -> Resource.filterByUrl "example.com" [] |> Expect.equal []
+    , test "matches path segment" <|
+        \() -> Resource.filterByUrl "/users" allResources |> List.length |> Expect.equal 1
+    ]
+
+
+
+-- totalTransferSize TESTS
+
+
+totalTransferSizeTests : List Test
+totalTransferSizeTests =
+    [ test "sums transfer sizes of all resources" <|
+        \() -> Resource.totalTransferSize allResources |> Expect.equal 137000
+    , test "returns 0 for empty list" <|
+        \() -> Resource.totalTransferSize [] |> Expect.equal 0
+    , test "returns single resource transfer size" <|
+        \() -> Resource.totalTransferSize [ scriptResource ] |> Expect.equal 45000
+    , test "cached resource contributes 0" <|
+        \() -> Resource.totalTransferSize [ cachedCss ] |> Expect.equal 0
+    , test "sums correctly with cached and uncached" <|
+        \() -> Resource.totalTransferSize [ scriptResource, cachedCss ] |> Expect.equal 45000
+    ]
+
+
+
+-- averageDuration TESTS
+
+
+averageDurationTests : List Test
+averageDurationTests =
+    [ test "calculates average duration of all resources" <|
+        \() -> Resource.averageDuration allResources |> Expect.within (Expect.Absolute 0.01) 153.0
+    , test "returns 0 for empty list" <|
+        \() -> Resource.averageDuration [] |> Expect.equal 0
+    , test "single resource returns its own duration" <|
+        \() -> Resource.averageDuration [ scriptResource ] |> Expect.equal 250.0
+    , test "two resources average correctly" <|
+        \() -> Resource.averageDuration [ scriptResource, cachedCss ] |> Expect.within (Expect.Absolute 0.01) 127.5
+    , test "short-duration cached resource" <|
+        \() -> Resource.averageDuration [ cachedCss ] |> Expect.equal 5.0
+    ]

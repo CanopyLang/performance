@@ -1,0 +1,286 @@
+module Performance.Vitals exposing
+    ( Vital(..)
+    , Rating(..)
+    , VitalsReport
+    , rate
+    , lcpThresholds
+    , inpThresholds
+    , clsThresholds
+    , ratingToString
+    , vitalToString
+    , vitalValue
+    , emptyReport
+    , updateReport
+    , observe
+    , observeLcp
+    , observeInp
+    , observeCls
+    , mapVital
+    )
+
+
+{-| Core Web Vitals measurement and rating.
+
+Provides types and functions for Google's three Core Web Vitals:
+LCP (Largest Contentful Paint), INP (Interaction to Next Paint),
+and CLS (Cumulative Layout Shift).
+
+
+# Vitals
+
+@docs Vital, Rating, VitalsReport
+
+
+# Rating
+
+@docs rate, lcpThresholds, inpThresholds, clsThresholds
+
+
+# Helpers
+
+@docs ratingToString, vitalToString, vitalValue, emptyReport, updateReport
+
+
+# Subscriptions
+
+@docs observe, observeLcp, observeInp, observeCls
+
+-}
+
+
+foreign import javascript "external/performance.js" as PerformanceFFI
+
+
+
+-- TYPES
+
+
+{-| A Core Web Vital measurement. -}
+type Vital
+    = Lcp Float
+    | Inp Float
+    | Cls Float
+
+
+{-| Rating for a Core Web Vital based on Google's thresholds.
+
+- Good: meets the recommended threshold
+- NeedsImprovement: between the good and poor thresholds
+- Poor: exceeds the poor threshold
+-}
+type Rating
+    = Good
+    | NeedsImprovement
+    | Poor
+
+
+{-| A complete Core Web Vitals report with all three metrics. -}
+type alias VitalsReport =
+    { lcp : Maybe { value : Float, rating : Rating }
+    , inp : Maybe { value : Float, rating : Rating }
+    , cls : Maybe { value : Float, rating : Rating }
+    }
+
+
+
+-- THRESHOLDS
+
+
+{-| LCP thresholds in milliseconds: (good, poor).
+
+Values below 2500ms are Good, 2500-4000ms NeedsImprovement, above 4000ms Poor.
+-}
+lcpThresholds : ( Float, Float )
+lcpThresholds =
+    ( 2500, 4000 )
+
+
+{-| INP thresholds in milliseconds: (good, poor).
+
+Values below 200ms are Good, 200-500ms NeedsImprovement, above 500ms Poor.
+-}
+inpThresholds : ( Float, Float )
+inpThresholds =
+    ( 200, 500 )
+
+
+{-| CLS thresholds (unitless score): (good, poor).
+
+Values below 0.1 are Good, 0.1-0.25 NeedsImprovement, above 0.25 Poor.
+-}
+clsThresholds : ( Float, Float )
+clsThresholds =
+    ( 0.1, 0.25 )
+
+
+
+-- RATING
+
+
+{-| Rate a vital measurement against Google's thresholds.
+
+    rate (Lcp 2100) == Good
+    rate (Lcp 3500) == NeedsImprovement
+    rate (Cls 0.05) == Good
+    rate (Inp 600) == Poor
+-}
+rate : Vital -> Rating
+rate vital =
+    case vital of
+        Lcp value ->
+            rateValue value lcpThresholds
+
+        Inp value ->
+            rateValue value inpThresholds
+
+        Cls value ->
+            rateValue value clsThresholds
+
+
+{-| Rate a value against a (good, poor) threshold pair. -}
+rateValue : Float -> ( Float, Float ) -> Rating
+rateValue value thresholds =
+    let
+        good =
+            Tuple.first thresholds
+
+        poor =
+            Tuple.second thresholds
+    in
+    if value < good then
+        Good
+
+    else if value < poor then
+        NeedsImprovement
+
+    else
+        Poor
+
+
+
+-- HELPERS
+
+
+{-| Convert a rating to a human-readable string. -}
+ratingToString : Rating -> String
+ratingToString rating =
+    case rating of
+        Good ->
+            "good"
+
+        NeedsImprovement ->
+            "needs-improvement"
+
+        Poor ->
+            "poor"
+
+
+{-| Get the metric name of a vital as a string. -}
+vitalToString : Vital -> String
+vitalToString vital =
+    case vital of
+        Lcp _ ->
+            "LCP"
+
+        Inp _ ->
+            "INP"
+
+        Cls _ ->
+            "CLS"
+
+
+{-| Extract the numeric value from a vital measurement. -}
+vitalValue : Vital -> Float
+vitalValue vital =
+    case vital of
+        Lcp v ->
+            v
+
+        Inp v ->
+            v
+
+        Cls v ->
+            v
+
+
+{-| An empty vitals report with no measurements. -}
+emptyReport : VitalsReport
+emptyReport =
+    { lcp = Nothing
+    , inp = Nothing
+    , cls = Nothing
+    }
+
+
+{-| Update a vitals report with a new vital measurement.
+
+Replaces the corresponding metric in the report with the new
+value and its rating.
+-}
+updateReport : Vital -> VitalsReport -> VitalsReport
+updateReport vital report =
+    let
+        rated =
+            { value = vitalValue vital, rating = rate vital }
+    in
+    case vital of
+        Lcp _ ->
+            { report | lcp = Just rated }
+
+        Inp _ ->
+            { report | inp = Just rated }
+
+        Cls _ ->
+            { report | cls = Just rated }
+
+
+
+-- SUBSCRIPTIONS
+
+
+{-| Subscribe to all Core Web Vitals measurements.
+
+Automatically sets up PerformanceObservers for LCP, INP, and CLS.
+Each vital is reported as it becomes available.
+-}
+observe : (Vital -> msg) -> Sub msg
+observe toMsg =
+    PerformanceFFI.observeVitals (toMsg << mapVital)
+
+
+{-| Map the raw vital tuple from FFI to a Vital type. -}
+mapVital : ( String, Float ) -> Vital
+mapVital pair =
+    let
+        vitalType =
+            Tuple.first pair
+
+        value =
+            Tuple.second pair
+    in
+    if vitalType == "lcp" then
+        Lcp value
+
+    else if vitalType == "inp" then
+        Inp value
+
+    else
+        Cls value
+
+
+{-| Subscribe to Largest Contentful Paint measurements. -}
+observeLcp : (Float -> msg) -> Sub msg
+observeLcp toMsg =
+    PerformanceFFI.observeLcp toMsg
+
+
+{-| Subscribe to Interaction to Next Paint measurements. -}
+observeInp : (Float -> msg) -> Sub msg
+observeInp toMsg =
+    PerformanceFFI.observeInp toMsg
+
+
+{-| Subscribe to Cumulative Layout Shift measurements. -}
+observeCls : (Float -> msg) -> Sub msg
+observeCls toMsg =
+    PerformanceFFI.observeCls toMsg

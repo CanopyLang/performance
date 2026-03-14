@@ -1,0 +1,140 @@
+module Performance.Navigation exposing
+    ( NavigationTiming
+    , NavigationMetrics
+    , computeMetrics
+    , get
+    , getMetrics
+    )
+
+
+{-| Navigation timing data for page load performance.
+
+Provides detailed breakdown of the page load lifecycle including
+DNS lookup, TCP connection, TLS handshake, request/response,
+DOM parsing, and rendering phases.
+
+
+# Types
+
+@docs NavigationTiming, NavigationMetrics
+
+
+# Computed Metrics
+
+@docs computeMetrics
+
+
+# Tasks
+
+@docs get, getMetrics
+
+-}
+
+
+import Task exposing (Task)
+
+
+foreign import javascript "external/performance.js" as PerformanceFFI
+
+
+
+-- TYPES
+
+
+{-| Detailed navigation timing breakdown.
+
+All times are high-resolution timestamps in milliseconds from the
+start of the navigation.
+-}
+type alias NavigationTiming =
+    { fetchStart : Float
+    , domainLookupStart : Float
+    , domainLookupEnd : Float
+    , connectStart : Float
+    , connectEnd : Float
+    , secureConnectionStart : Float
+    , requestStart : Float
+    , responseStart : Float
+    , responseEnd : Float
+    , domInteractive : Float
+    , domContentLoadedEventStart : Float
+    , domContentLoadedEventEnd : Float
+    , domComplete : Float
+    , loadEventStart : Float
+    , loadEventEnd : Float
+    , transferSize : Int
+    , encodedBodySize : Int
+    , decodedBodySize : Int
+    }
+
+
+{-| Computed metrics derived from raw navigation timing.
+
+These are the high-level metrics most useful for performance analysis.
+-}
+type alias NavigationMetrics =
+    { dnsLookup : Float
+    , tcpConnection : Float
+    , tlsHandshake : Float
+    , ttfb : Float
+    , contentDownload : Float
+    , domParsing : Float
+    , domContentLoaded : Float
+    , pageLoad : Float
+    }
+
+
+
+-- COMPUTED METRICS
+
+
+{-| Compute derived metrics from raw navigation timing.
+
+Calculates high-level performance metrics by subtracting the
+relevant timing milestones.
+-}
+computeMetrics : NavigationTiming -> NavigationMetrics
+computeMetrics timing =
+    { dnsLookup = timing.domainLookupEnd - timing.domainLookupStart
+    , tcpConnection = timing.connectEnd - timing.connectStart
+    , tlsHandshake = computeTlsHandshake timing
+    , ttfb = timing.responseStart - timing.fetchStart
+    , contentDownload = timing.responseEnd - timing.responseStart
+    , domParsing = timing.domInteractive - timing.responseEnd
+    , domContentLoaded = timing.domContentLoadedEventEnd - timing.fetchStart
+    , pageLoad = timing.loadEventEnd - timing.fetchStart
+    }
+
+
+{-| Compute TLS handshake time. Returns 0 if not HTTPS. -}
+computeTlsHandshake : NavigationTiming -> Float
+computeTlsHandshake timing =
+    if timing.secureConnectionStart > 0 then
+        timing.connectEnd - timing.secureConnectionStart
+
+    else
+        0
+
+
+
+-- TASKS
+
+
+{-| Get the navigation timing for the current page load.
+
+Returns Nothing if navigation timing is not yet available
+(e.g., the page has not fully loaded).
+-}
+get : Task Never (Maybe NavigationTiming)
+get =
+    PerformanceFFI.getNavigationTiming
+
+
+{-| Get computed navigation metrics derived from raw timing.
+
+Returns Nothing if navigation timing is not yet available.
+-}
+getMetrics : Task Never (Maybe NavigationMetrics)
+getMetrics =
+    PerformanceFFI.getNavigationTiming
+        |> Task.map (Maybe.map computeMetrics)

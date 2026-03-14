@@ -1,0 +1,163 @@
+module Performance.Resource exposing
+    ( ResourceTiming
+    , isCached
+    , filterByType
+    , filterByUrl
+    , totalTransferSize
+    , averageDuration
+    , getAll
+    , getByType
+    , getByUrl
+    )
+
+
+{-| Resource timing data for individual resource loads.
+
+Provides timing information for every resource loaded by the page
+including scripts, stylesheets, images, fonts, and API calls.
+
+
+# Types
+
+@docs ResourceTiming
+
+
+# Helpers
+
+@docs isCached, filterByType, filterByUrl, totalTransferSize, averageDuration
+
+
+# Tasks
+
+@docs getAll, getByType, getByUrl
+
+-}
+
+
+import Task exposing (Task)
+
+
+foreign import javascript "external/performance.js" as PerformanceFFI
+
+
+
+-- TYPES
+
+
+{-| Timing data for an individual resource load. -}
+type alias ResourceTiming =
+    { name : String
+    , initiatorType : String
+    , startTime : Float
+    , duration : Float
+    , transferSize : Int
+    , encodedBodySize : Int
+    , decodedBodySize : Int
+    , responseStart : Float
+    , responseEnd : Float
+    }
+
+
+
+-- HELPERS
+
+
+{-| Check if a resource was served from cache.
+
+A transfer size of zero indicates the resource was served from
+the browser cache or a service worker cache.
+-}
+isCached : ResourceTiming -> Bool
+isCached resource =
+    resource.transferSize == 0
+
+
+{-| Filter resources by initiator type.
+
+Common initiator types: "script", "css", "img", "fetch",
+"xmlhttprequest", "link", "other".
+-}
+filterByType : String -> List ResourceTiming -> List ResourceTiming
+filterByType initiatorType resources =
+    List.filter (matchesType initiatorType) resources
+
+
+{-| Check if a resource matches the given initiator type. -}
+matchesType : String -> ResourceTiming -> Bool
+matchesType initiatorType r =
+    r.initiatorType == initiatorType
+
+
+{-| Filter resources whose URL contains the given substring. -}
+filterByUrl : String -> List ResourceTiming -> List ResourceTiming
+filterByUrl urlPattern resources =
+    List.filter (matchesUrl urlPattern) resources
+
+
+{-| Check if a resource's URL contains the given pattern. -}
+matchesUrl : String -> ResourceTiming -> Bool
+matchesUrl urlPattern r =
+    String.contains urlPattern r.name
+
+
+{-| Calculate the total transfer size of a list of resources in bytes. -}
+totalTransferSize : List ResourceTiming -> Int
+totalTransferSize resources =
+    List.foldl addTransferSize 0 resources
+
+
+{-| Accumulate transfer size for folding. -}
+addTransferSize : ResourceTiming -> Int -> Int
+addTransferSize r acc =
+    acc + r.transferSize
+
+
+{-| Calculate the average duration of a list of resources.
+
+Returns 0 if the list is empty.
+-}
+averageDuration : List ResourceTiming -> Float
+averageDuration resources =
+    case resources of
+        [] ->
+            0
+
+        _ ->
+            let
+                total =
+                    List.foldl addDuration 0 resources
+
+                count =
+                    toFloat (List.length resources)
+            in
+            total / count
+
+
+{-| Accumulate duration for folding. -}
+addDuration : ResourceTiming -> Float -> Float
+addDuration r acc =
+    acc + r.duration
+
+
+
+-- TASKS
+
+
+{-| Get all resource timing entries from the performance timeline. -}
+getAll : Task Never (List ResourceTiming)
+getAll =
+    PerformanceFFI.getResourceEntries
+
+
+{-| Get resource timing entries filtered by initiator type. -}
+getByType : String -> Task Never (List ResourceTiming)
+getByType initiatorType =
+    PerformanceFFI.getResourceEntries
+        |> Task.map (filterByType initiatorType)
+
+
+{-| Get resource timing entries matching a URL substring. -}
+getByUrl : String -> Task Never (List ResourceTiming)
+getByUrl urlPattern =
+    PerformanceFFI.getResourceEntries
+        |> Task.map (filterByUrl urlPattern)

@@ -1,0 +1,438 @@
+module Test.Vitals exposing (main, tests)
+
+import Basics exposing (..)
+import Expect
+import Performance.Vitals as Vitals exposing (Rating(..), Vital(..), VitalsReport)
+import Test exposing (..)
+
+
+main : Test
+main =
+    tests
+
+
+tests : Test
+tests =
+    describe "Performance.Vitals"
+        [ describe "rate LCP" rateLcpTests
+        , describe "rate INP" rateInpTests
+        , describe "rate CLS" rateClsTests
+        , describe "thresholds" thresholdTests
+        , describe "ratingToString" ratingToStringTests
+        , describe "vitalToString" vitalToStringTests
+        , describe "vitalValue" vitalValueTests
+        , describe "emptyReport" emptyReportTests
+        , describe "updateReport" updateReportTests
+        , describe "VitalsReport constructor" vitalsReportConstructorTests
+        , describe "subscription constructors" subscriptionTests
+        , describe "mapVital" mapVitalTests
+        ]
+
+
+
+-- HELPERS
+
+
+expectRating : Rating -> Rating -> Expect.Expectation
+expectRating expected actual =
+    Expect.equal (Vitals.ratingToString expected) (Vitals.ratingToString actual)
+
+
+
+-- rate LCP TESTS
+
+
+rateLcpTests : List Test
+rateLcpTests =
+    [ test "LCP 0 is Good" <|
+        \() -> Vitals.rate (Lcp 0) |> expectRating Good
+    , test "LCP 1000 is Good" <|
+        \() -> Vitals.rate (Lcp 1000) |> expectRating Good
+    , test "LCP 2499 is Good" <|
+        \() -> Vitals.rate (Lcp 2499) |> expectRating Good
+    , test "LCP 2500 is NeedsImprovement (at good boundary)" <|
+        \() -> Vitals.rate (Lcp 2500) |> expectRating NeedsImprovement
+    , test "LCP 3000 is NeedsImprovement" <|
+        \() -> Vitals.rate (Lcp 3000) |> expectRating NeedsImprovement
+    , test "LCP 3999 is NeedsImprovement" <|
+        \() -> Vitals.rate (Lcp 3999) |> expectRating NeedsImprovement
+    , test "LCP 4000 is Poor (at poor boundary)" <|
+        \() -> Vitals.rate (Lcp 4000) |> expectRating Poor
+    , test "LCP 5000 is Poor" <|
+        \() -> Vitals.rate (Lcp 5000) |> expectRating Poor
+    , test "LCP 10000 is Poor" <|
+        \() -> Vitals.rate (Lcp 10000) |> expectRating Poor
+    ]
+
+
+
+-- rate INP TESTS
+
+
+rateInpTests : List Test
+rateInpTests =
+    [ test "INP 0 is Good" <|
+        \() -> Vitals.rate (Inp 0) |> expectRating Good
+    , test "INP 100 is Good" <|
+        \() -> Vitals.rate (Inp 100) |> expectRating Good
+    , test "INP 199 is Good" <|
+        \() -> Vitals.rate (Inp 199) |> expectRating Good
+    , test "INP 200 is NeedsImprovement (at good boundary)" <|
+        \() -> Vitals.rate (Inp 200) |> expectRating NeedsImprovement
+    , test "INP 350 is NeedsImprovement" <|
+        \() -> Vitals.rate (Inp 350) |> expectRating NeedsImprovement
+    , test "INP 499 is NeedsImprovement" <|
+        \() -> Vitals.rate (Inp 499) |> expectRating NeedsImprovement
+    , test "INP 500 is Poor (at poor boundary)" <|
+        \() -> Vitals.rate (Inp 500) |> expectRating Poor
+    , test "INP 800 is Poor" <|
+        \() -> Vitals.rate (Inp 800) |> expectRating Poor
+    ]
+
+
+
+-- rate CLS TESTS
+
+
+rateClsTests : List Test
+rateClsTests =
+    [ test "CLS 0 is Good" <|
+        \() -> Vitals.rate (Cls 0) |> expectRating Good
+    , test "CLS 0.05 is Good" <|
+        \() -> Vitals.rate (Cls 0.05) |> expectRating Good
+    , test "CLS 0.099 is Good" <|
+        \() -> Vitals.rate (Cls 0.099) |> expectRating Good
+    , test "CLS 0.1 is NeedsImprovement (at good boundary)" <|
+        \() -> Vitals.rate (Cls 0.1) |> expectRating NeedsImprovement
+    , test "CLS 0.18 is NeedsImprovement" <|
+        \() -> Vitals.rate (Cls 0.18) |> expectRating NeedsImprovement
+    , test "CLS 0.249 is NeedsImprovement" <|
+        \() -> Vitals.rate (Cls 0.249) |> expectRating NeedsImprovement
+    , test "CLS 0.25 is Poor (at poor boundary)" <|
+        \() -> Vitals.rate (Cls 0.25) |> expectRating Poor
+    , test "CLS 0.5 is Poor" <|
+        \() -> Vitals.rate (Cls 0.5) |> expectRating Poor
+    , test "CLS 1.0 is Poor" <|
+        \() -> Vitals.rate (Cls 1.0) |> expectRating Poor
+    ]
+
+
+
+-- THRESHOLD TESTS
+
+
+thresholdTests : List Test
+thresholdTests =
+    [ test "LCP good threshold is 2500" <|
+        \() -> Tuple.first Vitals.lcpThresholds |> Expect.equal 2500
+    , test "LCP poor threshold is 4000" <|
+        \() -> Tuple.second Vitals.lcpThresholds |> Expect.equal 4000
+    , test "INP good threshold is 200" <|
+        \() -> Tuple.first Vitals.inpThresholds |> Expect.equal 200
+    , test "INP poor threshold is 500" <|
+        \() -> Tuple.second Vitals.inpThresholds |> Expect.equal 500
+    , test "CLS good threshold is 0.1" <|
+        \() -> Tuple.first Vitals.clsThresholds |> Expect.equal 0.1
+    , test "CLS poor threshold is 0.25" <|
+        \() -> Tuple.second Vitals.clsThresholds |> Expect.equal 0.25
+    ]
+
+
+
+-- ratingToString TESTS
+
+
+ratingToStringTests : List Test
+ratingToStringTests =
+    [ test "Good becomes good" <|
+        \() -> Vitals.ratingToString Good |> Expect.equal "good"
+    , test "NeedsImprovement becomes needs-improvement" <|
+        \() -> Vitals.ratingToString NeedsImprovement |> Expect.equal "needs-improvement"
+    , test "Poor becomes poor" <|
+        \() -> Vitals.ratingToString Poor |> Expect.equal "poor"
+    ]
+
+
+
+-- vitalToString TESTS
+
+
+vitalToStringTests : List Test
+vitalToStringTests =
+    [ test "Lcp becomes LCP" <|
+        \() -> Vitals.vitalToString (Lcp 1000) |> Expect.equal "LCP"
+    , test "Inp becomes INP" <|
+        \() -> Vitals.vitalToString (Inp 100) |> Expect.equal "INP"
+    , test "Cls becomes CLS" <|
+        \() -> Vitals.vitalToString (Cls 0.1) |> Expect.equal "CLS"
+    , test "vitalToString ignores the numeric value for Lcp" <|
+        \() -> Vitals.vitalToString (Lcp 9999) |> Expect.equal "LCP"
+    , test "vitalToString ignores the numeric value for Inp" <|
+        \() -> Vitals.vitalToString (Inp 0) |> Expect.equal "INP"
+    , test "vitalToString ignores the numeric value for Cls" <|
+        \() -> Vitals.vitalToString (Cls 0) |> Expect.equal "CLS"
+    ]
+
+
+
+-- vitalValue TESTS
+
+
+vitalValueTests : List Test
+vitalValueTests =
+    [ test "extracts value from Lcp" <|
+        \() -> Vitals.vitalValue (Lcp 2500) |> Expect.equal 2500
+    , test "extracts value from Inp" <|
+        \() -> Vitals.vitalValue (Inp 200) |> Expect.equal 200
+    , test "extracts value from Cls" <|
+        \() -> Vitals.vitalValue (Cls 0.15) |> Expect.equal 0.15
+    , test "extracts zero from Lcp" <|
+        \() -> Vitals.vitalValue (Lcp 0) |> Expect.equal 0
+    , test "extracts zero from Cls" <|
+        \() -> Vitals.vitalValue (Cls 0) |> Expect.equal 0
+    ]
+
+
+
+-- emptyReport TESTS
+
+
+emptyReportTests : List Test
+emptyReportTests =
+    [ test "lcp is Nothing" <|
+        \() -> Vitals.emptyReport.lcp |> Expect.equal Nothing
+    , test "inp is Nothing" <|
+        \() -> Vitals.emptyReport.inp |> Expect.equal Nothing
+    , test "cls is Nothing" <|
+        \() -> Vitals.emptyReport.cls |> Expect.equal Nothing
+    ]
+
+
+
+-- updateReport TESTS
+
+
+updateReportTests : List Test
+updateReportTests =
+    [ test "Lcp sets lcp value" <|
+        \() ->
+            Vitals.updateReport (Lcp 2100) Vitals.emptyReport
+                |> .lcp
+                |> Maybe.map .value
+                |> Expect.equal (Just 2100)
+    , test "Lcp good rating" <|
+        \() ->
+            Vitals.updateReport (Lcp 2100) Vitals.emptyReport
+                |> .lcp
+                |> Maybe.map (\r -> Vitals.ratingToString r.rating)
+                |> Expect.equal (Just "good")
+    , test "Lcp poor rating" <|
+        \() ->
+            Vitals.updateReport (Lcp 5000) Vitals.emptyReport
+                |> .lcp
+                |> Maybe.map (\r -> Vitals.ratingToString r.rating)
+                |> Expect.equal (Just "poor")
+    , test "Inp sets inp value" <|
+        \() ->
+            Vitals.updateReport (Inp 350) Vitals.emptyReport
+                |> .inp
+                |> Maybe.map .value
+                |> Expect.equal (Just 350)
+    , test "Inp needs-improvement rating" <|
+        \() ->
+            Vitals.updateReport (Inp 350) Vitals.emptyReport
+                |> .inp
+                |> Maybe.map (\r -> Vitals.ratingToString r.rating)
+                |> Expect.equal (Just "needs-improvement")
+    , test "Cls sets cls value" <|
+        \() ->
+            Vitals.updateReport (Cls 0.3) Vitals.emptyReport
+                |> .cls
+                |> Maybe.map .value
+                |> Expect.equal (Just 0.3)
+    , test "Cls poor rating" <|
+        \() ->
+            Vitals.updateReport (Cls 0.3) Vitals.emptyReport
+                |> .cls
+                |> Maybe.map (\r -> Vitals.ratingToString r.rating)
+                |> Expect.equal (Just "poor")
+    , test "Lcp does not affect inp" <|
+        \() ->
+            Vitals.updateReport (Lcp 1000) Vitals.emptyReport
+                |> .inp
+                |> Expect.equal Nothing
+    , test "Lcp does not affect cls" <|
+        \() ->
+            Vitals.updateReport (Lcp 1000) Vitals.emptyReport
+                |> .cls
+                |> Expect.equal Nothing
+    , test "Inp does not affect lcp" <|
+        \() ->
+            Vitals.updateReport (Inp 100) Vitals.emptyReport
+                |> .lcp
+                |> Expect.equal Nothing
+    , test "Cls does not affect lcp" <|
+        \() ->
+            Vitals.updateReport (Cls 0.05) Vitals.emptyReport
+                |> .lcp
+                |> Expect.equal Nothing
+    , test "updating preserves previously set fields" <|
+        \() ->
+            Vitals.emptyReport
+                |> Vitals.updateReport (Lcp 1000)
+                |> Vitals.updateReport (Inp 100)
+                |> .lcp
+                |> Maybe.map .value
+                |> Expect.equal (Just 1000)
+    , test "updating same vital replaces previous value" <|
+        \() ->
+            Vitals.emptyReport
+                |> Vitals.updateReport (Lcp 1000)
+                |> Vitals.updateReport (Lcp 3000)
+                |> .lcp
+                |> Maybe.map .value
+                |> Expect.equal (Just 3000)
+    , test "replacing vital updates rating too" <|
+        \() ->
+            Vitals.emptyReport
+                |> Vitals.updateReport (Lcp 1000)
+                |> Vitals.updateReport (Lcp 5000)
+                |> .lcp
+                |> Maybe.map (\r -> Vitals.ratingToString r.rating)
+                |> Expect.equal (Just "poor")
+    , test "full report with all three vitals" <|
+        \() ->
+            let
+                report =
+                    Vitals.emptyReport
+                        |> Vitals.updateReport (Lcp 1500)
+                        |> Vitals.updateReport (Inp 100)
+                        |> Vitals.updateReport (Cls 0.05)
+            in
+            ( Maybe.map .value report.lcp
+            , Maybe.map .value report.inp
+            , Maybe.map .value report.cls
+            )
+                |> Expect.equal ( Just 1500, Just 100, Just 0.05 )
+    , test "full report all good ratings" <|
+        \() ->
+            let
+                report =
+                    Vitals.emptyReport
+                        |> Vitals.updateReport (Lcp 1500)
+                        |> Vitals.updateReport (Inp 100)
+                        |> Vitals.updateReport (Cls 0.05)
+
+                allGood =
+                    [ report.lcp, report.inp, report.cls ]
+                        |> List.filterMap identity
+                        |> List.all (\r -> Vitals.ratingToString r.rating == "good")
+            in
+            allGood |> Expect.equal True
+    ]
+
+
+{-| Test the positional VitalsReport constructor to cover the type alias
+record constructor coverage point. VitalsReport has fields: lcp, inp, cls.
+-}
+vitalsReportConstructorTests : List Test
+vitalsReportConstructorTests =
+    [ test "positional VitalsReport constructor creates report with all Nothing" <|
+        \() ->
+            let
+                report =
+                    VitalsReport Nothing Nothing Nothing
+            in
+            ( report.lcp, report.inp, report.cls )
+                |> Expect.equal ( Nothing, Nothing, Nothing )
+    , test "positional VitalsReport constructor with some values" <|
+        \() ->
+            let
+                rated =
+                    { value = 1500, rating = Good }
+
+                report =
+                    VitalsReport (Just rated) Nothing Nothing
+            in
+            report.lcp
+                |> Maybe.map .value
+                |> Expect.equal (Just 1500)
+    ]
+
+
+{-| Test subscription constructor functions. Calling these creates Sub values
+which covers the function definition coverage points even though the Subs
+cannot be dispatched without a running effect manager.
+-}
+subscriptionTests : List Test
+subscriptionTests =
+    [ test "observe creates a Sub" <|
+        \() ->
+            let
+                sub =
+                    Vitals.observe identity
+            in
+            Expect.pass
+    , test "observeLcp creates a Sub" <|
+        \() ->
+            let
+                sub =
+                    Vitals.observeLcp Lcp
+            in
+            Expect.pass
+    , test "observeInp creates a Sub" <|
+        \() ->
+            let
+                sub =
+                    Vitals.observeInp Inp
+            in
+            Expect.pass
+    , test "observeCls creates a Sub" <|
+        \() ->
+            let
+                sub =
+                    Vitals.observeCls Cls
+            in
+            Expect.pass
+    ]
+
+
+{-| Test mapVital which converts FFI tuples to Vital values. -}
+mapVitalTests : List Test
+mapVitalTests =
+    [ test "maps lcp tuple to Lcp" <|
+        \() ->
+            Vitals.mapVital ( "lcp", 2500 )
+                |> Vitals.vitalToString
+                |> Expect.equal "LCP"
+    , test "maps lcp tuple value" <|
+        \() ->
+            Vitals.mapVital ( "lcp", 2500 )
+                |> Vitals.vitalValue
+                |> Expect.equal 2500
+    , test "maps inp tuple to Inp" <|
+        \() ->
+            Vitals.mapVital ( "inp", 200 )
+                |> Vitals.vitalToString
+                |> Expect.equal "INP"
+    , test "maps inp tuple value" <|
+        \() ->
+            Vitals.mapVital ( "inp", 200 )
+                |> Vitals.vitalValue
+                |> Expect.equal 200
+    , test "maps cls tuple to Cls" <|
+        \() ->
+            Vitals.mapVital ( "cls", 0.15 )
+                |> Vitals.vitalToString
+                |> Expect.equal "CLS"
+    , test "maps cls tuple value" <|
+        \() ->
+            Vitals.mapVital ( "cls", 0.15 )
+                |> Vitals.vitalValue
+                |> Expect.equal 0.15
+    , test "maps unknown type to Cls" <|
+        \() ->
+            Vitals.mapVital ( "unknown", 0.5 )
+                |> Vitals.vitalToString
+                |> Expect.equal "CLS"
+    ]

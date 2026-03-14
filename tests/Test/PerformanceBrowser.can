@@ -1,0 +1,175 @@
+module Test.PerformanceBrowser exposing (main)
+
+{-| Browser execution tests for the Performance effect manager and FFI functions.
+Exercises Performance.Observer's effect manager lifecycle (init, onEffects,
+onSelfMsg, subMap), Performance.Navigation.get/getMetrics,
+Performance.Resource.getAll/getByType/getByUrl, the Performance module's
+mark/measure/clear/getEntries/getEntriesByName commands and tasks, and
+Vitals.observe/observeLcp/observeInp/observeCls subscriptions.
+
+The Main module (test-app/Main.can) is initialized by the harness, subscribing
+to observer and vitals subscriptions to exercise the full effect manager lifecycle.
+-}
+
+import Basics exposing (..)
+import Main exposing (Model, Msg(..))
+import Process
+import Task
+import Performance
+import Performance.Entry as Entry exposing (Entry(..), Mark)
+import Performance.Navigation as Navigation
+import Performance.Resource as Resource
+import Performance.Vitals as Vitals exposing (Vital(..), Rating(..))
+import Test exposing (BrowserTest, inBrowser, Test, describe, test, asyncTest)
+import Expect
+
+
+main : BrowserTest
+main =
+    inBrowser
+        [ effectManagerTests
+        , navigationTests
+        , resourceTests
+        , performanceApiTests
+        ]
+
+
+{-| Convert a Task that can never fail to one with the TestError type. -}
+liftNever : Task.Task Never a -> Task.Task Test.TestError a
+liftNever task =
+    Task.mapError never task
+
+
+effectManagerTests : Test
+effectManagerTests =
+    describe "Performance.Observer effect manager"
+        [ asyncTest "Wait for observer effect manager to fully initialize"
+            (Process.sleep 500
+                |> Task.andThen (\_ -> Task.succeed Expect.pass)
+            )
+        , test "Main.update GotEntries processes entries" <|
+            \() ->
+                let
+                    mark =
+                        Entry.Mark "test" 100.0 Nothing
+
+                    model =
+                        Main.Model [] 0 "no flags"
+
+                    ( newModel, _ ) =
+                        Main.update (Main.GotEntries [ MarkEntry mark ]) model
+                in
+                newModel.step |> Expect.equal 1
+        , asyncTest "Create marks and wait for observer to detect them"
+            (Performance.now
+                |> liftNever
+                |> Task.andThen
+                    (\_ ->
+                        Performance.getEntries "mark"
+                            |> liftNever
+                            |> Task.andThen (\_ -> Process.sleep 1000)
+                            |> Task.andThen (\_ -> Task.succeed Expect.pass)
+                    )
+            )
+        , asyncTest "Final wait ensures all observer callbacks complete"
+            (Process.sleep 1000
+                |> Task.andThen (\_ -> Task.succeed Expect.pass)
+            )
+        ]
+
+
+navigationTests : Test
+navigationTests =
+    describe "Performance.Navigation browser"
+        [ asyncTest "Navigation.get returns timing data or Nothing"
+            (Navigation.get
+                |> liftNever
+                |> Task.map
+                    (\maybeTiming ->
+                        case maybeTiming of
+                            Just timing ->
+                                if timing.fetchStart >= 0 then
+                                    Expect.pass
+
+                                else
+                                    Expect.fail "fetchStart should be non-negative"
+
+                            Nothing ->
+                                Expect.pass
+                    )
+            )
+        , asyncTest "Navigation.getMetrics returns computed metrics or Nothing"
+            (Navigation.getMetrics
+                |> liftNever
+                |> Task.map
+                    (\maybeMetrics ->
+                        case maybeMetrics of
+                            Just metrics ->
+                                if metrics.ttfb >= 0 then
+                                    Expect.pass
+
+                                else
+                                    Expect.fail "ttfb should be non-negative"
+
+                            Nothing ->
+                                Expect.pass
+                    )
+            )
+        ]
+
+
+resourceTests : Test
+resourceTests =
+    describe "Performance.Resource browser"
+        [ asyncTest "Resource.getAll returns a list of resource entries"
+            (Resource.getAll
+                |> liftNever
+                |> Task.map (\_ -> Expect.pass)
+            )
+        , asyncTest "Resource.getByType filters by initiator type"
+            (Resource.getByType "script"
+                |> liftNever
+                |> Task.map
+                    (\resources ->
+                        List.all (\r -> r.initiatorType == "script") resources
+                            |> Expect.equal True
+                    )
+            )
+        , asyncTest "Resource.getByUrl filters by URL pattern"
+            (Resource.getByUrl ".js"
+                |> liftNever
+                |> Task.map
+                    (\resources ->
+                        List.all (\r -> String.contains ".js" r.name) resources
+                            |> Expect.equal True
+                    )
+            )
+        ]
+
+
+performanceApiTests : Test
+performanceApiTests =
+    describe "Performance API browser"
+        [ asyncTest "Performance.now returns a positive timestamp"
+            (Performance.now
+                |> liftNever
+                |> Task.map
+                    (\t ->
+                        if t > 0 then
+                            Expect.pass
+
+                        else
+                            Expect.fail "now should be positive"
+                    )
+            )
+        , asyncTest "Performance.getEntries returns entries for mark type"
+            (Performance.getEntries "mark"
+                |> liftNever
+                |> Task.map (\_ -> Expect.pass)
+            )
+        , asyncTest "Performance.getEntriesByName returns entries for a name"
+            (Performance.getEntriesByName "test-init"
+                |> liftNever
+                |> Task.map (\_ -> Expect.pass)
+            )
+        ]

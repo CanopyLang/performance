@@ -1,0 +1,166 @@
+module Performance exposing
+    ( now
+    , mark
+    , markWithDetail
+    , measure
+    , measureFromMark
+    , measureWithDetail
+    , clearMarks
+    , clearAllMarks
+    , clearMeasures
+    , clearAllMeasures
+    , getEntries
+    , getEntriesByName
+    )
+
+
+{-| Performance API bindings for marks, measures, and timestamps.
+
+Create performance marks to record points in time, then measure the
+duration between them. Read entries from the performance timeline
+for analysis.
+
+
+# High-Resolution Timestamps
+
+@docs now
+
+
+# Marks
+
+@docs mark, markWithDetail, clearMarks, clearAllMarks
+
+
+# Measures
+
+@docs measure, measureFromMark, measureWithDetail, clearMeasures, clearAllMeasures
+
+
+# Querying
+
+@docs getEntries, getEntriesByName
+
+-}
+
+
+import Json.Encode
+import Performance.Entry as Entry exposing (Entry)
+import Task exposing (Task)
+
+
+foreign import javascript "external/performance.js" as PerformanceFFI
+
+
+
+-- HIGH-RESOLUTION TIMESTAMPS
+
+
+{-| Get a high-resolution timestamp.
+
+Returns the number of milliseconds elapsed since the page started loading,
+with microsecond precision (subject to browser rounding for security).
+-}
+now : Task Never Float
+now =
+    PerformanceFFI.now
+
+
+
+-- MARKS
+
+
+{-| Create a performance mark at the current time.
+
+Marks a point in time with a name. Use `measure` to compute the duration
+between two marks.
+-}
+mark : String -> Cmd msg
+mark name =
+    PerformanceFFI.mark name
+
+
+{-| Create a performance mark with custom data attached.
+
+The detail value is serialized as JSON and attached to the mark entry.
+-}
+markWithDetail : String -> Json.Encode.Value -> Cmd msg
+markWithDetail name detail =
+    PerformanceFFI.markWithDetail name detail
+
+
+{-| Clear all performance marks with the given name. -}
+clearMarks : String -> Cmd msg
+clearMarks name =
+    PerformanceFFI.clearMarks name
+
+
+{-| Clear all performance marks from the timeline. -}
+clearAllMarks : Cmd msg
+clearAllMarks =
+    PerformanceFFI.clearAllMarks
+
+
+{-| Clear all performance measures with the given name. -}
+clearMeasures : String -> Cmd msg
+clearMeasures name =
+    PerformanceFFI.clearMeasures name
+
+
+{-| Clear all performance measures from the timeline. -}
+clearAllMeasures : Cmd msg
+clearAllMeasures =
+    PerformanceFFI.clearAllMeasures
+
+
+
+-- MEASURES
+
+
+{-| Measure the duration between two named marks.
+
+    Performance.measure "processing-time" "process-start" "process-end"
+-}
+measure : String -> String -> String -> Cmd msg
+measure name startMark endMark =
+    PerformanceFFI.measure name startMark endMark
+
+
+{-| Measure the duration from a named mark to the current time.
+
+    Performance.measureFromMark "time-since-init" "app-init"
+-}
+measureFromMark : String -> String -> Cmd msg
+measureFromMark name startMark =
+    PerformanceFFI.measureFromMark name startMark
+
+
+{-| Measure the duration between two marks with custom data attached.
+
+    Performance.measureWithDetail "api-call"
+        "fetch-start"
+        "fetch-end"
+        (Json.Encode.object [ ( "endpoint", Json.Encode.string "/api/users" ) ])
+-}
+measureWithDetail : String -> String -> String -> Json.Encode.Value -> Cmd msg
+measureWithDetail name startMark endMark detail =
+    PerformanceFFI.measureWithDetail name startMark endMark detail
+
+
+
+-- QUERYING
+
+
+{-| Get all entries of a given type from the performance timeline.
+
+Valid entry types: "mark", "measure", "navigation", "resource",
+"longtask", "layout-shift", "largest-contentful-paint", "event".
+-}
+getEntries : String -> Task Never (List Entry)
+getEntries entryType =
+    PerformanceFFI.getEntries entryType
+
+
+{-| Get all entries with a given name from the performance timeline. -}
+getEntriesByName : String -> Task Never (List Entry)
+getEntriesByName name =
+    PerformanceFFI.getEntriesByName name

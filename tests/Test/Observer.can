@@ -1,0 +1,251 @@
+module Test.Observer exposing (main, tests)
+
+import Basics exposing (..)
+import Expect
+import Performance.Entry as Entry exposing (Entry(..))
+import Performance.Observer as Observer exposing (EntryType(..), MySub(..), SelfMsg(..))
+import Platform
+import Task
+import Test exposing (..)
+
+
+main : Test
+main =
+    tests
+
+
+tests : Test
+tests =
+    describe "Performance.Observer"
+        [ describe "entryTypeToString" entryTypeToStringTests
+        , describe "ObserveConfig" observeConfigTests
+        , describe "entryType roundtrip consistency" roundtripTests
+        , describe "subMap" subMapTests
+        , describe "ObserveConfig positional constructor" observeConfigConstructorTests
+        , describe "SelfMsg" selfMsgTests
+        ]
+
+
+
+-- entryTypeToString TESTS
+
+
+entryTypeToStringTests : List Test
+entryTypeToStringTests =
+    [ test "Marks maps to mark" <|
+        \() -> Observer.entryTypeToString Marks |> Expect.equal "mark"
+    , test "Measures maps to measure" <|
+        \() -> Observer.entryTypeToString Measures |> Expect.equal "measure"
+    , test "NavigationEntries maps to navigation" <|
+        \() -> Observer.entryTypeToString NavigationEntries |> Expect.equal "navigation"
+    , test "ResourceEntries maps to resource" <|
+        \() -> Observer.entryTypeToString ResourceEntries |> Expect.equal "resource"
+    , test "LongTasks maps to longtask" <|
+        \() -> Observer.entryTypeToString LongTasks |> Expect.equal "longtask"
+    , test "LayoutShifts maps to layout-shift" <|
+        \() -> Observer.entryTypeToString LayoutShifts |> Expect.equal "layout-shift"
+    , test "LargestContentfulPaints maps to largest-contentful-paint" <|
+        \() -> Observer.entryTypeToString LargestContentfulPaints |> Expect.equal "largest-contentful-paint"
+    , test "EventTimings maps to event" <|
+        \() -> Observer.entryTypeToString EventTimings |> Expect.equal "event"
+    ]
+
+
+
+-- ObserveConfig TESTS
+
+
+observeConfigTests : List Test
+observeConfigTests =
+    [ test "config can hold multiple entry types" <|
+        \() ->
+            let
+                config =
+                    { entryTypes = [ Marks, Measures, LongTasks ]
+                    , buffered = False
+                    , onEntries = identity
+                    }
+            in
+            List.length config.entryTypes |> Expect.equal 3
+    , test "config buffered can be True" <|
+        \() ->
+            let
+                config =
+                    { entryTypes = [ LongTasks ]
+                    , buffered = True
+                    , onEntries = identity
+                    }
+            in
+            config.buffered |> Expect.equal True
+    , test "config buffered can be False" <|
+        \() ->
+            let
+                config =
+                    { entryTypes = [ Marks ]
+                    , buffered = False
+                    , onEntries = identity
+                    }
+            in
+            config.buffered |> Expect.equal False
+    , test "config with empty entry types list" <|
+        \() ->
+            let
+                config =
+                    { entryTypes = []
+                    , buffered = False
+                    , onEntries = identity
+                    }
+            in
+            List.length config.entryTypes |> Expect.equal 0
+    , test "config with single entry type" <|
+        \() ->
+            let
+                config =
+                    { entryTypes = [ EventTimings ]
+                    , buffered = True
+                    , onEntries = identity
+                    }
+            in
+            List.length config.entryTypes |> Expect.equal 1
+    ]
+
+
+
+-- ROUNDTRIP CONSISTENCY TESTS
+
+
+allEntryTypes : List EntryType
+allEntryTypes =
+    [ Marks, Measures, NavigationEntries, ResourceEntries
+    , LongTasks, LayoutShifts, LargestContentfulPaints, EventTimings
+    ]
+
+
+roundtripTests : List Test
+roundtripTests =
+    [ test "all entry types produce distinct strings" <|
+        \() ->
+            let
+                strings =
+                    List.map Observer.entryTypeToString allEntryTypes
+
+                uniqueCount =
+                    List.foldl
+                        (\s acc ->
+                            if List.member s acc then
+                                acc
+                            else
+                                s :: acc
+                        )
+                        []
+                        strings
+                        |> List.length
+            in
+            uniqueCount |> Expect.equal 8
+    , test "all entry types map to non-empty strings" <|
+        \() ->
+            List.map Observer.entryTypeToString allEntryTypes
+                |> List.all (\s -> String.length s > 0)
+                |> Expect.equal True
+    , test "mapping all entry types produces 8 strings" <|
+        \() ->
+            List.map Observer.entryTypeToString allEntryTypes
+                |> List.length
+                |> Expect.equal 8
+    ]
+
+
+{-| Test subMap to cover the subMap function coverage point.
+subMap maps a function over the message type in a MySub.
+-}
+subMapTests : List Test
+subMapTests =
+    [ test "subMap transforms the message function" <|
+        \() ->
+            let
+                original =
+                    Observe [ Marks ] False List.length
+
+                mapped =
+                    Observer.subMap String.fromInt original
+            in
+            case mapped of
+                Observe entryTypes buffered _ ->
+                    ( entryTypes, buffered )
+                        |> Expect.equal ( [ Marks ], False )
+    , test "subMap preserves entry types list" <|
+        \() ->
+            let
+                original =
+                    Observe [ Marks, Measures, LongTasks ] True List.length
+
+                mapped =
+                    Observer.subMap String.fromInt original
+            in
+            case mapped of
+                Observe entryTypes buffered _ ->
+                    List.length entryTypes |> Expect.equal 3
+    , test "subMap preserves buffered flag" <|
+        \() ->
+            let
+                original =
+                    Observe [ EventTimings ] True List.length
+
+                mapped =
+                    Observer.subMap String.fromInt original
+            in
+            case mapped of
+                Observe _ buffered _ ->
+                    buffered |> Expect.equal True
+    ]
+
+
+{-| Test ObserveConfig positional constructor coverage point.
+ObserveConfig has fields: entryTypes, buffered, onEntries.
+-}
+observeConfigConstructorTests : List Test
+observeConfigConstructorTests =
+    [ test "ObserveConfig positional constructor" <|
+        \() ->
+            let
+                config =
+                    Observer.ObserveConfig [ Marks, Measures ] False identity
+            in
+            List.length config.entryTypes |> Expect.equal 2
+    , test "ObserveConfig positional constructor buffered" <|
+        \() ->
+            let
+                config =
+                    Observer.ObserveConfig [ LongTasks ] True identity
+            in
+            config.buffered |> Expect.equal True
+    ]
+
+
+{-| Test that the GotEntries SelfMsg constructor can be created
+and that onSelfMsg handles it (returns a succeeding Task).
+-}
+selfMsgTests : List Test
+selfMsgTests =
+    [ test "GotEntries constructor creates a SelfMsg" <|
+        \() ->
+            let
+                mark =
+                    Entry.Mark "test" 100.0 Nothing
+
+                msg =
+                    GotEntries [ MarkEntry mark ]
+            in
+            case msg of
+                GotEntries entries ->
+                    List.length entries |> Expect.equal 1
+    , test "GotEntries with empty list" <|
+        \() ->
+            let
+                msg =
+                    GotEntries []
+            in
+            case msg of
+                GotEntries entries ->
+                    List.length entries |> Expect.equal 0
+    ]

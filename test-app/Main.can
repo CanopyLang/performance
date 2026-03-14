@@ -1,0 +1,74 @@
+module Main exposing (main, Model, Msg(..), update)
+
+{-| A Platform.worker application that exercises the Performance.Observer
+effect manager lifecycle. Subscribes to observer entries and uses Json
+operations to ensure the Json kernel is bundled.
+-}
+
+import Json.Decode
+import Json.Encode
+import Performance.Entry as Entry exposing (Entry(..))
+import Performance.Observer as Observer exposing (EntryType(..))
+import Platform
+
+
+type alias Model =
+    { entries : List Entry
+    , step : Int
+    , debugInfo : String
+    }
+
+
+type Msg
+    = GotEntries (List Entry)
+
+
+main : Program Json.Decode.Value Model Msg
+main =
+    Platform.worker
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }
+
+
+init : Json.Decode.Value -> ( Model, Cmd Msg )
+init flags =
+    let
+        info =
+            case Json.Decode.decodeValue (Json.Decode.string) flags of
+                Ok s ->
+                    s
+
+                Err _ ->
+                    "no flags"
+    in
+    ( Model [] 0 info
+    , Cmd.none
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        GotEntries newEntries ->
+            ( { model | entries = model.entries ++ newEntries, step = model.step + 1 }
+            , Cmd.none
+            )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    Sub.batch
+        [ Observer.observe
+            { entryTypes = [ Marks, Measures ]
+            , buffered = True
+            , onEntries = GotEntries
+            }
+        , Observer.observeMany
+            [ { entryTypes = [ LongTasks ]
+              , buffered = False
+              , onEntries = GotEntries
+              }
+            ]
+        ]
