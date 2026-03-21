@@ -500,3 +500,253 @@ function observeCls(toMsg) {
 		_toMsg: toMsg
 	});
 }
+
+
+// ============================================================================
+// PERFORMANCE VITALS EFFECT MANAGER
+//
+// Registers a Canopy effect manager for the 'PerformanceVitals' subscription
+// tag so that observeVitals / observeLcp / observeInp / observeCls actually
+// set up PerformanceObserver instances and dispatch measurements to the app.
+//
+// INP algorithm: W3C spec (https://web.dev/inp/) requires the 98th-percentile
+// interaction duration across all interactions on the page, not Math.max.
+//
+// CLS algorithm: W3C spec requires the session-window model — group consecutive
+// layout shifts into windows separated by >1 s gaps or >5 s total length,
+// then report the maximum session window score.
+// ============================================================================
+
+
+// --- Mutable effect-manager state -------------------------------------------
+
+var _PerformanceVitals_started   = false;
+var _PerformanceVitals_router    = null;
+var _PerformanceVitals_currentSubs = [];
+var _PerformanceVitals_observers = {};
+
+// INP: accumulate all interaction durations; report 98th-percentile
+var _PerformanceVitals_inpDurations = [];
+
+// CLS session-window state
+var _PerformanceVitals_clsSession   = null;  // { start, last, score }
+var _PerformanceVitals_clsMaxScore  = 0;
+
+// LCP: latest value (start time in ms)
+var _PerformanceVitals_lcpValue = 0;
+
+
+// --- INP: 98th-percentile computation ---------------------------------------
+
+function _PerformanceVitals_computeInp()
+{
+	var durations = _PerformanceVitals_inpDurations;
+	if (durations.length === 0) { return 0; }
+
+	var sorted = durations.slice().sort(function(a, b) { return a - b; });
+
+	// W3C: round down to the 98th-percentile index.  For a single entry that
+	// index is 0 (i.e. the only entry), which is correct.
+	var idx = Math.floor(0.98 * sorted.length);
+	if (idx >= sorted.length) { idx = sorted.length - 1; }
+
+	return sorted[idx];
+}
+
+
+// --- CLS: session-window algorithm ------------------------------------------
+
+function _PerformanceVitals_processCls(entry)
+{
+	// Per the spec, shifts with recent user input are excluded.
+	if (entry.hadRecentInput) { return; }
+
+	var time  = entry.startTime;
+	var value = entry.value || 0;
+
+	var session = _PerformanceVitals_clsSession;
+
+	if (session === null ||
+	    time - session.last  > 1000 ||   // gap > 1 s → new window
+	    time - session.start > 5000)      // duration > 5 s → new window
+	{
+		_PerformanceVitals_clsSession = { start: time, last: time, score: value };
+	}
+	else
+	{
+		session.last   = time;
+		session.score += value;
+	}
+
+	if (_PerformanceVitals_clsSession.score > _PerformanceVitals_clsMaxScore)
+	{
+		_PerformanceVitals_clsMaxScore = _PerformanceVitals_clsSession.score;
+	}
+}
+
+
+// --- Dispatcher: send a vital measurement to all matching subscribers --------
+
+function _PerformanceVitals_dispatch(type, value)
+{
+	var router = _PerformanceVitals_router;
+	if (!router) { return; }
+
+	// Canopy Tuple2 for the 'vitals' subscription (mapVital expects this shape)
+	var pair = { a: type, b: value };
+
+	var subs = _PerformanceVitals_currentSubs;
+	for (var i = 0; i < subs.length; i++)
+	{
+		var sub = subs[i];
+		var tag = sub.$;
+
+		if (tag === 'vitals')
+		{
+			// observeVitals receives (String, Float) tuple mapped through mapVital
+			router.__sendToApp(sub._toMsg(pair));
+		}
+		else if (tag === 'lcp' && type === 'lcp')
+		{
+			router.__sendToApp(sub._toMsg(value));
+		}
+		else if (tag === 'inp' && type === 'inp')
+		{
+			router.__sendToApp(sub._toMsg(value));
+		}
+		else if (tag === 'cls' && type === 'cls')
+		{
+			router.__sendToApp(sub._toMsg(value));
+		}
+	}
+}
+
+
+// --- PerformanceObserver setup / teardown -----------------------------------
+
+function _PerformanceVitals_startObservers()
+{
+	var obs = {};
+
+	// LCP: always use the latest entry's startTime
+	try
+	{
+		var lcpObs = new PerformanceObserver(function(list)
+		{
+			var entries = list.getEntries();
+			if (entries.length > 0)
+			{
+				_PerformanceVitals_lcpValue = entries[entries.length - 1].startTime;
+				_PerformanceVitals_dispatch('lcp', _PerformanceVitals_lcpValue);
+			}
+		});
+		lcpObs.observe({ type: 'largest-contentful-paint', buffered: true });
+		obs.lcp = lcpObs;
+	}
+	catch(e) {}
+
+	// INP: collect event + first-input durations; report 98th percentile
+	try
+	{
+		var eventObs = new PerformanceObserver(function(list)
+		{
+			var entries = list.getEntries();
+			for (var i = 0; i < entries.length; i++)
+			{
+				var dur = entries[i].duration;
+				if (dur > 0) { _PerformanceVitals_inpDurations.push(dur); }
+			}
+			var inp = _PerformanceVitals_computeInp();
+			if (inp > 0) { _PerformanceVitals_dispatch('inp', inp); }
+		});
+		try { eventObs.observe({ type: 'event', durationThreshold: 16, buffered: true }); } catch(e) {}
+		try { eventObs.observe({ type: 'first-input', buffered: true }); } catch(e) {}
+		obs.event = eventObs;
+	}
+	catch(e) {}
+
+	// CLS: session-window aggregation; report the running max
+	try
+	{
+		var clsObs = new PerformanceObserver(function(list)
+		{
+			var entries = list.getEntries();
+			for (var i = 0; i < entries.length; i++)
+			{
+				_PerformanceVitals_processCls(entries[i]);
+			}
+			_PerformanceVitals_dispatch('cls', _PerformanceVitals_clsMaxScore);
+		});
+		clsObs.observe({ type: 'layout-shift', buffered: true });
+		obs.cls = clsObs;
+	}
+	catch(e) {}
+
+	_PerformanceVitals_observers = obs;
+}
+
+
+function _PerformanceVitals_stopObservers()
+{
+	var obs = _PerformanceVitals_observers;
+	try { if (obs.lcp)   { obs.lcp.disconnect();   } } catch(e) {}
+	try { if (obs.event) { obs.event.disconnect(); } } catch(e) {}
+	try { if (obs.cls)   { obs.cls.disconnect();   } } catch(e) {}
+	_PerformanceVitals_observers  = {};
+	_PerformanceVitals_inpDurations = [];
+	_PerformanceVitals_clsSession   = null;
+	_PerformanceVitals_clsMaxScore  = 0;
+	_PerformanceVitals_lcpValue     = 0;
+}
+
+
+// --- Effect-manager callbacks ------------------------------------------------
+
+function _PerformanceVitals_onEffects(router, subs, state)
+{
+	// Convert Canopy linked list to JS array
+	var subList = [];
+	for (var cur = subs; cur.b; cur = cur.b) { subList.push(cur.a); }
+
+	_PerformanceVitals_currentSubs = subList;
+	_PerformanceVitals_router      = router;
+
+	if (subList.length > 0 && !_PerformanceVitals_started)
+	{
+		_PerformanceVitals_startObservers();
+		_PerformanceVitals_started = true;
+	}
+	else if (subList.length === 0 && _PerformanceVitals_started)
+	{
+		_PerformanceVitals_stopObservers();
+		_PerformanceVitals_started = false;
+	}
+
+	return _Scheduler_succeed(state);
+}
+
+
+function _PerformanceVitals_onSelfMsg(router, msg, state)
+{
+	return _Scheduler_succeed(state);
+}
+
+
+// Subscription mapper: lift (a -> b) over the _toMsg callback
+var _PerformanceVitals_subMap = F2(function(tagger, sub)
+{
+	return {
+		$: sub.$,
+		_toMsg: function(value) { return tagger(sub._toMsg(value)); }
+	};
+});
+
+
+// Register the effect manager so _Platform_leaf('PerformanceVitals') works
+_Platform_effectManagers['PerformanceVitals'] = _Platform_createManager(
+	_Scheduler_succeed(null),           // init
+	F3(_PerformanceVitals_onEffects),   // onEffects
+	F3(_PerformanceVitals_onSelfMsg),   // onSelfMsg
+	0,                                  // no commands
+	_PerformanceVitals_subMap           // subMap for Sub mapping
+);

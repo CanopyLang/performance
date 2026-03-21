@@ -26,6 +26,8 @@ tests =
         , describe "VitalsReport constructor" vitalsReportConstructorTests
         , describe "subscription constructors" subscriptionTests
         , describe "mapVital" mapVitalTests
+        , describe "computeInp" computeInpTests
+        , describe "computeCls" computeClsTests
         ]
 
 
@@ -435,4 +437,154 @@ mapVitalTests =
             Vitals.mapVital ( "unknown", 0.5 )
                 |> Vitals.vitalToString
                 |> Expect.equal "CLS"
+    ]
+
+
+-- COMPUTE INP TESTS (98th-percentile algorithm)
+
+
+computeInpTests : List Test
+computeInpTests =
+    [ test "empty list returns 0" <|
+        \() ->
+            Vitals.computeInp []
+                |> Expect.equal 0
+    , test "single duration returns that duration" <|
+        \() ->
+            -- floor(0.98 * 1) = 0, so index 0
+            Vitals.computeInp [ 200 ]
+                |> Expect.equal 200
+    , test "two equal durations returns that duration" <|
+        \() ->
+            -- floor(0.98 * 2) = 1, so index 1 of [100, 100] = 100
+            Vitals.computeInp [ 100, 100 ]
+                |> Expect.equal 100
+    , test "does NOT return max (unlike naive impl)" <|
+        \() ->
+            -- floor(0.98 * 3) = 2; sorted = [50, 100, 500]; idx 2 = 500
+            -- With 3 samples this does equal max, but with 51 samples it won't
+            let
+                -- 51 durations: 50 at 50ms and 1 outlier at 9999ms
+                -- floor(0.98 * 51) = 49; sorted[49] = 50 (not 9999)
+                durations =
+                    List.repeat 50 50 ++ [ 9999 ]
+            in
+            Vitals.computeInp durations
+                |> Expect.equal 50
+    , test "with 100 sorted interactions, returns index 98" <|
+        \() ->
+            -- floor(0.98 * 100) = 98; sorted[98] is 99th element (0-indexed)
+            let
+                durations =
+                    List.map toFloat (List.range 1 100)
+            in
+            Vitals.computeInp durations
+                |> Expect.equal 99
+    , test "sorts unsorted input before computing" <|
+        \() ->
+            -- Same as single-element test but unsorted input
+            Vitals.computeInp [ 500, 100, 300 ]
+                -- floor(0.98 * 3) = 2; sorted = [100, 300, 500]; idx 2 = 500
+                |> Expect.equal 500
+    , test "five interactions — 98th percentile is index 4" <|
+        \() ->
+            -- floor(0.98 * 5) = 4; sorted = [10,20,30,40,50]; idx 4 = 50
+            Vitals.computeInp [ 30, 10, 50, 20, 40 ]
+                |> Expect.equal 50
+    , test "index clamped to last element for small lists" <|
+        \() ->
+            -- floor(0.98 * 1) = 0, min(0, 0) = 0 → returns first (only) element
+            Vitals.computeInp [ 999 ]
+                |> Expect.equal 999
+    ]
+
+
+-- COMPUTE CLS TESTS (session-window algorithm)
+
+
+shift : Float -> Float -> Bool -> Vitals.LayoutShift
+shift startTime value hadInput =
+    { startTime = startTime, value = value, hadRecentInput = hadInput }
+
+
+computeClsTests : List Test
+computeClsTests =
+    [ test "empty list returns 0" <|
+        \() ->
+            Vitals.computeCls []
+                |> Expect.equal 0
+    , test "single shift returns its value" <|
+        \() ->
+            Vitals.computeCls [ shift 0 0.1 False ]
+                |> Expect.equal 0.1
+    , test "shifts with hadRecentInput=True are excluded" <|
+        \() ->
+            -- Only the non-input shift should count
+            Vitals.computeCls
+                [ shift 0 0.5 True
+                , shift 100 0.1 False
+                ]
+                |> Expect.equal 0.1
+    , test "two shifts in same window are summed" <|
+        \() ->
+            -- gap = 500ms < 1000ms, total duration = 500ms < 5000ms
+            Vitals.computeCls
+                [ shift 0 0.1 False
+                , shift 500 0.15 False
+                ]
+                |> Expect.equal 0.25
+    , test "gap > 1s starts new window" <|
+        \() ->
+            -- Two windows: [0.2] and [0.1]; max = 0.2
+            Vitals.computeCls
+                [ shift 0 0.2 False
+                , shift 1500 0.1 False
+                ]
+                |> Expect.equal 0.2
+    , test "gap exactly 1000ms starts new window" <|
+        \() ->
+            -- gap > 1000ms threshold; 1001ms gap → new window
+            Vitals.computeCls
+                [ shift 0 0.1 False
+                , shift 1001 0.3 False
+                ]
+                |> Expect.equal 0.3
+    , test "window exceeding 5s duration starts new window" <|
+        \() ->
+            -- shift at 0 and 5001 → second shift exceeds 5s window duration
+            -- first window score = 0.1, second = 0.2; max = 0.2
+            Vitals.computeCls
+                [ shift 0 0.1 False
+                , shift 5001 0.2 False
+                ]
+                |> Expect.equal 0.2
+    , test "returns maximum across multiple windows" <|
+        \() ->
+            -- Window 1 (t=0..800): 0.1 + 0.15 = 0.25
+            -- Window 2 (t=2000..2200): 0.05 + 0.3 = 0.35  (gap 1200 > 1000)
+            -- Max = 0.35
+            Vitals.computeCls
+                [ shift 0 0.1 False
+                , shift 800 0.15 False
+                , shift 2000 0.05 False
+                , shift 2200 0.3 False
+                ]
+                |> Expect.equal 0.35
+    , test "unsorted input is sorted by startTime before processing" <|
+        \() ->
+            -- Same as above but provided in reverse order
+            Vitals.computeCls
+                [ shift 2200 0.3 False
+                , shift 800 0.15 False
+                , shift 2000 0.05 False
+                , shift 0 0.1 False
+                ]
+                |> Expect.equal 0.35
+    , test "all shifts excluded returns 0" <|
+        \() ->
+            Vitals.computeCls
+                [ shift 0 0.5 True
+                , shift 100 0.5 True
+                ]
+                |> Expect.equal 0
     ]

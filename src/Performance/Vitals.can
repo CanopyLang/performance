@@ -16,6 +16,9 @@ module Performance.Vitals exposing
     , observeInp
     , observeCls
     , mapVital
+    , computeInp
+    , computeCls
+    , LayoutShift
     )
 
 
@@ -284,3 +287,118 @@ observeInp toMsg =
 observeCls : (Float -> msg) -> Sub msg
 observeCls toMsg =
     PerformanceFFI.observeCls toMsg
+
+
+
+-- PURE ALGORITHM HELPERS
+
+
+{-| A single layout-shift performance entry. -}
+type alias LayoutShift =
+    { startTime : Float
+    , value : Float
+    , hadRecentInput : Bool
+    }
+
+
+{-| Compute the INP (Interaction to Next Paint) score from a list of
+interaction durations using the W3C 98th-percentile algorithm.
+
+The list should contain the `duration` of every 'event' or 'first-input'
+PerformanceEntry recorded since navigation. The score is the value at
+`floor(0.98 * n)` in the sorted list (0-indexed), or 0 for an empty list.
+
+    computeInp []             == 0
+    computeInp [100]          == 100
+    computeInp [50, 200, 300] == 300   -- floor(0.98*3) = 2 → index 2
+-}
+computeInp : List Float -> Float
+computeInp durations =
+    let
+        n =
+            List.length durations
+    in
+    if n == 0 then
+        0
+
+    else
+        let
+            sorted =
+                List.sort durations
+
+            idx =
+                min (floor (0.98 * toFloat n)) (n - 1)
+        in
+        sorted
+            |> List.drop idx
+            |> List.head
+            |> Maybe.withDefault 0
+
+
+{-| Compute the CLS (Cumulative Layout Shift) score from a list of
+layout-shift entries using the W3C session-window algorithm.
+
+Session-window rules (from the spec):
+- Shifts where `hadRecentInput` is `True` are excluded.
+- Consecutive shifts form a session window as long as:
+    - The gap between adjacent shifts is ≤ 1 000 ms, **and**
+    - The total window duration is ≤ 5 000 ms.
+- When either limit is exceeded a new window starts.
+- The CLS score is the **maximum** sum across all session windows.
+
+The list need not be pre-sorted; this function sorts by `startTime` first.
+
+    computeCls []                                           == 0
+    computeCls [{ startTime = 0, value = 0.1, hadRecentInput = False }]  == 0.1
+-}
+computeCls : List LayoutShift -> Float
+computeCls entries =
+    let
+        valid =
+            entries
+                |> List.filter (\e -> not e.hadRecentInput)
+                |> List.sortBy .startTime
+    in
+    List.foldl accumClsSession { start = -1, last = -1, score = 0, maxScore = 0 } valid
+        |> .maxScore
+
+
+type alias ClsState =
+    { start : Float
+    , last : Float
+    , score : Float
+    , maxScore : Float
+    }
+
+
+accumClsSession : LayoutShift -> ClsState -> ClsState
+accumClsSession entry state =
+    let
+        time =
+            entry.startTime
+
+        isNewWindow =
+            state.start < 0
+                || time - state.last > 1000
+                || time - state.start > 5000
+
+        newState =
+            if isNewWindow then
+                { start = time
+                , last = time
+                , score = entry.value
+                , maxScore = max state.maxScore entry.value
+                }
+
+            else
+                let
+                    newScore =
+                        state.score + entry.value
+                in
+                { state
+                    | last = time
+                    , score = newScore
+                    , maxScore = max state.maxScore newScore
+                }
+    in
+    newState
